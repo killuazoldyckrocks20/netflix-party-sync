@@ -45,6 +45,48 @@
   transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease;
 }
 
+/* Show Detection & Mismatch Banner */
+.nps-show-banner {
+  background: rgba(30, 30, 30, 0.95);
+  border-bottom: 1px solid var(--nps-border);
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  gap: 8px;
+}
+
+.nps-show-banner.mismatch {
+  background: rgba(229, 9, 20, 0.2);
+  border-bottom: 1px solid var(--nps-primary);
+}
+
+.nps-show-title {
+  color: #fff;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 190px;
+}
+
+.nps-jump-btn {
+  background: var(--nps-primary);
+  border: none;
+  color: #fff;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.nps-jump-btn:hover {
+  background: var(--nps-primary-hover);
+}
+
 /* Header & Drag Handle */
 .nps-header {
   display: flex;
@@ -407,6 +449,17 @@
 .nps-sync-btn:hover {
   background: var(--nps-primary);
   border-color: var(--nps-primary);
+}
+
+.nps-catchup-btn {
+  background: rgba(229, 9, 20, 0.25);
+  border-color: var(--nps-primary);
+  color: #fff;
+}
+
+.nps-catchup-btn:hover {
+  background: var(--nps-primary);
+  box-shadow: 0 0 8px rgba(229, 9, 20, 0.5);
 }
 
 /* Bottom Call Control Toolbar */

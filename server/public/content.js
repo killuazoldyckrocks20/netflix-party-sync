@@ -5,7 +5,9 @@
  *  2. Injected floating draggable overlay UI
  *  3. WebRTC 2-way audio/video peer connection
  *  4. Individual audio mixing (Netflix media vs Friend's voice)
- *  5. Play/pause/seek synchronization with loop-prevention
+ *  5. Play/pause/seek synchronization with media key emulation & Catch-Up Sync
+ *  6. Show compatibility detection & episode mismatch alerting
+ *  7. Independent microphone and camera enable/disable controls
  */
 
 (function () {
@@ -18,11 +20,14 @@
 
   // Inject Bridge Script into MAIN world
   function injectBridge() {
+    if (window.__nps_bridge_loaded) return;
+
     const script = document.createElement('script');
     if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL) {
       script.src = chrome.runtime.getURL('netflix_bridge.js');
     } else {
-      script.src = '/netflix_bridge.js';
+      const base = (window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1) || './');
+      script.src = base + 'netflix_bridge.js';
     }
     script.onload = () => script.remove();
     (document.head || document.documentElement).appendChild(script);
@@ -48,10 +53,16 @@
   let netflixVolume = 0.8;
   let friendVolume = 1.0;
 
+  let currentLocalVideoId = null;
+  let currentLocalTitle = '';
+  let remoteVideoId = null;
+  let remoteTitle = '';
+
   let ignoreLocalEventsUntil = 0;
   let currentRemoteTime = 0;
   let lastKnownPlayerTime = 0;
   let isPlayerPaused = true;
+  let catchUpInterval = null;
 
   // ICE configuration with Google public STUN
   const rtcConfig = {
@@ -88,6 +99,12 @@
             <button class="nps-icon-btn" id="nps-min-btn" title="Minimize overlay">_</button>
             <button class="nps-icon-btn" id="nps-close-btn" title="Hide overlay">✕</button>
           </div>
+        </div>
+
+        <!-- Show Status / Episode Sync Banner -->
+        <div class="nps-show-banner hidden" id="nps-show-banner">
+          <span class="nps-show-title" id="nps-show-text">🎬 Detecting Netflix show...</span>
+          <button class="nps-jump-btn" id="nps-jump-btn" style="display:none;">Jump to Episode</button>
         </div>
 
         <!-- Video Call Stage -->
@@ -156,12 +173,13 @@
           </div>
         </div>
 
-        <!-- Playback Info & Quick Sync Bar -->
+        <!-- Playback Info & Catch-Up Sync Bar -->
         <div class="nps-playback-bar">
           <span class="nps-timecode" id="nps-timecode-label">00:00:00</span>
-          <button class="nps-sync-btn" id="nps-force-sync-btn" title="Resync playback with friend">
-            🔄 Force Sync
-          </button>
+          <div style="display: flex; gap: 6px;">
+            <button class="nps-sync-btn" id="nps-playpause-btn" title="Toggle Play / Pause (Spacebar)">⏯️ Play/Pause</button>
+            <button class="nps-sync-btn nps-catchup-btn" id="nps-catchup-btn" title="Catch-Up Sync: If behind, plays until aligned while keeping ahead party paused">🎯 Catch Up</button>
+          </div>
         </div>
 
         <!-- Call Toolbar -->
@@ -236,7 +254,8 @@
     const camBtn = document.getElementById('nps-toggle-cam');
     const pipBtn = document.getElementById('nps-toggle-pip');
     const localPip = document.getElementById('nps-local-pip');
-    const forceSyncBtn = document.getElementById('nps-force-sync-btn');
+    const playPauseBtn = document.getElementById('nps-playpause-btn');
+    const catchUpBtn = document.getElementById('nps-catchup-btn');
     const reconnectBtn = document.getElementById('nps-reconnect-btn');
 
     // Minimize & Restore
@@ -249,7 +268,7 @@
 
     // Copy Invite Link
     copyBtn.addEventListener('click', () => {
-      const inviteUrl = `http://${window.location.hostname || 'localhost'}:8000/?room=${roomId}`;
+      const inviteUrl = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
       navigator.clipboard.writeText(inviteUrl).then(() => {
         showSyncAlert('🔗 Link Copied to Clipboard!');
       });
@@ -260,7 +279,6 @@
       const val = parseInt(e.target.value, 10);
       netflixVolume = val / 100;
       netflixLabel.textContent = `${val}%`;
-      // Send to bridge
       window.postMessage({
         source: 'NETFLIX_PARTY_CONTENT',
         action: 'volume',
@@ -278,30 +296,24 @@
       }
     });
 
-    // Mic Toggle
+    // Mic Toggle (Independent Mute/Unmute)
     micBtn.addEventListener('click', () => {
       isAudioEnabled = !isAudioEnabled;
       if (localStream) {
         localStream.getAudioTracks().forEach(t => t.enabled = isAudioEnabled);
       }
-      micBtn.classList.toggle('off', !isAudioEnabled);
-      micBtn.innerHTML = isAudioEnabled ? '🎙️' : '🔇';
-      showSyncAlert(isAudioEnabled ? 'Mic Unmuted' : 'Mic Muted');
+      updateMediaUI();
+      showSyncAlert(isAudioEnabled ? 'Microphone Active' : 'Microphone Disabled', isAudioEnabled ? '🎙️' : '🔇');
     });
 
-    // Camera Toggle
+    // Camera Toggle (Independent Video Enable/Disable)
     camBtn.addEventListener('click', () => {
       isVideoEnabled = !isVideoEnabled;
       if (localStream) {
         localStream.getVideoTracks().forEach(t => t.enabled = isVideoEnabled);
       }
-      camBtn.classList.toggle('off', !isVideoEnabled);
-      camBtn.innerHTML = isVideoEnabled ? '📹' : '🚫';
-      const localVideo = document.getElementById('nps-local-video');
-      const offLabel = document.getElementById('nps-local-off-label');
-      localVideo.classList.toggle('hidden', !isVideoEnabled);
-      offLabel.classList.toggle('hidden', isVideoEnabled);
-      showSyncAlert(isVideoEnabled ? 'Camera On' : 'Camera Off');
+      updateMediaUI();
+      showSyncAlert(isVideoEnabled ? 'Camera Active' : 'Camera Disabled', isVideoEnabled ? '📹' : '🚫');
     });
 
     // PIP Self Preview Toggle
@@ -311,22 +323,67 @@
       pipBtn.classList.toggle('off', !isHidden);
     });
 
-    // Force Resync Button
-    forceSyncBtn.addEventListener('click', () => {
-      if (currentRemoteTime > 0) {
-        executeRemoteSync(isPlayerPaused ? 'pause' : 'play', currentRemoteTime);
-        showSyncAlert('🔄 Re-synchronized!');
-      } else {
-        // Broadcast current local state to room
-        broadcastSyncState(isPlayerPaused ? 'pause' : 'play', lastKnownPlayerTime);
-        showSyncAlert('📡 Broadcasted current time');
-      }
-    });
+    // Play / Pause Toggle Button
+    if (playPauseBtn) {
+      playPauseBtn.addEventListener('click', () => {
+        const nextAction = isPlayerPaused ? 'play' : 'pause';
+        const video = document.querySelector('video');
+        const now = video ? video.currentTime : lastKnownPlayerTime;
+        ignoreLocalEventsUntil = Date.now() + 1500;
+        simulateMediaControl(nextAction, now);
+        broadcastSyncState(nextAction, now);
+        showSyncAlert(`You ${nextAction}ed playback`, nextAction === 'play' ? '▶️' : '⏸️');
+      });
+    }
+
+    // Catch-Up Sync Button
+    if (catchUpBtn) {
+      catchUpBtn.addEventListener('click', () => {
+        const video = document.querySelector('video');
+        const now = video ? video.currentTime : lastKnownPlayerTime;
+        if (typeof currentRemoteTime === 'number' && currentRemoteTime > 0) {
+          runCatchUpTo(currentRemoteTime, isPlayerPaused ? 'pause' : 'play', 'Friend');
+        } else {
+          // Broadcast catch-up request
+          broadcastSyncState('request_catch_up', now);
+          showSyncAlert('🎯 Sent catch-up request to friend', '📡');
+        }
+      });
+    }
 
     reconnectBtn.addEventListener('click', () => {
       initWebSocket();
       showSyncAlert('Reconnecting...');
     });
+  }
+
+  function updateMediaUI() {
+    const micBtn = document.getElementById('nps-toggle-mic');
+    const camBtn = document.getElementById('nps-toggle-cam');
+    const localVideo = document.getElementById('nps-local-video');
+    const offLabel = document.getElementById('nps-local-off-label');
+    const fillEl = document.getElementById('nps-mic-meter-fill');
+
+    if (micBtn) {
+      micBtn.classList.toggle('off', !isAudioEnabled);
+      micBtn.innerHTML = isAudioEnabled ? '🎙️' : '🔇';
+      micBtn.title = isAudioEnabled ? 'Microphone Active (Click to Mute)' : 'Microphone Disabled (Click to Unmute)';
+    }
+
+    if (!isAudioEnabled && fillEl) {
+      fillEl.style.width = '0%';
+    }
+
+    if (camBtn) {
+      camBtn.classList.toggle('off', !isVideoEnabled);
+      camBtn.innerHTML = isVideoEnabled ? '📹' : '🚫';
+      camBtn.title = isVideoEnabled ? 'Camera Active (Click to Turn Off)' : 'Camera Disabled (Click to Turn On)';
+    }
+
+    if (localVideo && offLabel) {
+      localVideo.classList.toggle('hidden', !isVideoEnabled);
+      offLabel.classList.toggle('hidden', isVideoEnabled);
+    }
   }
 
   function showSyncAlert(msg, icon = '🎬') {
@@ -550,19 +607,23 @@
 
   async function initLocalMedia() {
     try {
-      // 1. Initial getUserMedia to gain permission
       localStream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,    // Eliminates any acoustic leakage from loud headphones
+          echoCancellation: true,    // Eliminates acoustic leakage from loud headphones
           noiseSuppression: true,    // Cuts laptop fan hum, AC hum, keyboard clicks
-          autoGainControl: true,     // Balances voice level when user shifts position relative to laptop mic
+          autoGainControl: true,     // Balances voice level
           sampleRate: { ideal: 48000 },
           channelCount: { ideal: 2 }
         },
         video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { max: 24 } }
       });
 
-      // 2. Discover devices and ensure Built-in mic is picked (locking Bluetooth in A2DP)
+      // Apply initial audio/video toggle preferences
+      localStream.getAudioTracks().forEach(t => t.enabled = isAudioEnabled);
+      localStream.getVideoTracks().forEach(t => t.enabled = isVideoEnabled);
+      updateMediaUI();
+
+      // Discover devices and ensure Built-in mic is picked (locking Bluetooth in A2DP)
       const inputs = await getAudioInputDevices();
       const bestBuiltIn = pickBestBuiltInMic(inputs);
 
@@ -585,7 +646,6 @@
       setupLocalMicMeter(localStream);
     } catch (err) {
       console.warn('[WebRTC] Camera/Mic access denied or unavailable. Joining in sync-only mode.', err);
-      // Create empty/silent tracks so WebRTC connection proceeds without failure
       localStream = new MediaStream();
     }
   }
@@ -764,40 +824,78 @@
     }
   }
 
-  // Remote Sync Execution
-  function handleRemoteSyncMessage(msg) {
-    const action = msg.action;
-    const time = msg.time;
-    const sender = msg.userName || 'Friend';
+  // Multi-tier Media Control & Key Emulation
+  function simulateMediaControl(action, time) {
+    const video = document.querySelector('video');
+    const isPaused = video ? video.paused : isPlayerPaused;
 
-    currentRemoteTime = time;
-
-    if (action === 'pause') {
-      executeRemoteSync('pause', time);
-      showSyncAlert(`${sender} paused at ${formatTime(time)}`, '⏸️');
-    } else if (action === 'play') {
-      executeRemoteSync('play', time);
-      showSyncAlert(`${sender} played at ${formatTime(time)}`, '▶️');
-    } else if (action === 'seek') {
-      executeRemoteSync('seek', time);
-      showSyncAlert(`${sender} jumped to ${formatTime(time)}`, '⏩');
-    }
-  }
-
-  function executeRemoteSync(action, time) {
-    // Suppress local echo for the next 750ms
-    ignoreLocalEventsUntil = Date.now() + 750;
-
-    // First seek if time difference is greater than 1 second
-    if (typeof time === 'number' && Math.abs(lastKnownPlayerTime - time) > 1.0) {
-      window.postMessage({
-        source: 'NETFLIX_PARTY_CONTENT',
-        action: 'seek',
-        time: time
-      }, '*');
+    // Time seeking if difference is significant (> 1.2s)
+    if (typeof time === 'number' && !isNaN(time) && video) {
+      if (Math.abs(video.currentTime - time) > 1.2) {
+        try { video.currentTime = time; } catch (e) {}
+      }
     }
 
-    // Then play or pause
+    // 1. Direct HTML5 Video execution (instant, zero-latency)
+    if (video) {
+      try {
+        if (action === 'play' && video.paused) {
+          const playPromise = video.play();
+          if (playPromise && playPromise.catch) {
+            playPromise.catch(() => {});
+          }
+        } else if (action === 'pause' && !video.paused) {
+          video.pause();
+        } else if (action === 'seek' && typeof time === 'number') {
+          video.currentTime = time;
+        }
+      } catch (e) {}
+    }
+
+    // 2. Click Netflix React UI Control Buttons if present
+    try {
+      const btnSelector = (action === 'play')
+        ? '[data-uia="control-play-pause-play"], button[aria-label="Play"], .button-nfplayerPlay'
+        : '[data-uia="control-play-pause-pause"], button[aria-label="Pause"], .button-nfplayerPause';
+      const btn = document.querySelector(btnSelector);
+      if (btn) {
+        btn.click();
+      } else {
+        // 3. Media key emulation (MediaPlayPause & Space key events)
+        const needsStateChange = (action === 'play' && isPaused) || (action === 'pause' && !isPaused);
+        if (needsStateChange) {
+          const target = video || document.querySelector('.watch-video--player-view') || document.activeElement || document.body;
+          // Dispatch MediaPlayPause (keyCode 179)
+          target.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'MediaPlayPause',
+            code: 'MediaPlayPause',
+            keyCode: 179,
+            which: 179,
+            bubbles: true,
+            cancelable: true
+          }));
+          // Dispatch Spacebar (keyCode 32)
+          target.dispatchEvent(new KeyboardEvent('keydown', {
+            key: ' ',
+            code: 'Space',
+            keyCode: 32,
+            which: 32,
+            bubbles: true,
+            cancelable: true
+          }));
+          target.dispatchEvent(new KeyboardEvent('keyup', {
+            key: ' ',
+            code: 'Space',
+            keyCode: 32,
+            which: 32,
+            bubbles: true,
+            cancelable: true
+          }));
+        }
+      }
+    } catch (e) {}
+
+    // 4. Send command to Main World Bridge (Cadmium internal Netflix API)
     window.postMessage({
       source: 'NETFLIX_PARTY_CONTENT',
       action: action,
@@ -805,13 +903,147 @@
     }, '*');
   }
 
-  function broadcastSyncState(action, time) {
+  // Catch-Up Sync Execution: Plays behind party until aligned, keeping ahead party paused
+  function stopCatchUp() {
+    if (catchUpInterval) {
+      clearInterval(catchUpInterval);
+      catchUpInterval = null;
+    }
+  }
+
+  function runCatchUpTo(targetTime, desiredAction = 'pause', sender = 'Friend') {
+    stopCatchUp();
+
+    const video = document.querySelector('video');
+    const localTime = video ? video.currentTime : lastKnownPlayerTime;
+    const diff = targetTime - localTime;
+
+    // Within 0.4s: Already aligned!
+    if (Math.abs(diff) <= 0.4) {
+      ignoreLocalEventsUntil = Date.now() + 1500;
+      simulateMediaControl(desiredAction, targetTime);
+      showSyncAlert(`🎯 In sync with ${sender}! (${formatTime(targetTime)})`, desiredAction === 'pause' ? '⏸️' : '▶️');
+      return;
+    }
+
+    // SCENARIO 1: Remote is ahead (targetTime > localTime) -> Local user is behind
+    // Action: Play local video until catching up to remote's time!
+    if (diff > 0.4) {
+      ignoreLocalEventsUntil = Date.now() + 60000; // Suppress play bounce during catch-up run
+      simulateMediaControl('play', localTime);
+      showSyncAlert(`⏩ Catching up to ${sender} (${diff.toFixed(1)}s behind)...`, '⚡');
+
+      catchUpInterval = setInterval(() => {
+        const now = video ? video.currentTime : lastKnownPlayerTime;
+        if (now >= targetTime - 0.25 || now > targetTime) {
+          stopCatchUp();
+          ignoreLocalEventsUntil = Date.now() + 1500;
+          simulateMediaControl(desiredAction, targetTime);
+          showSyncAlert(`🎯 Caught up to ${sender} at ${formatTime(targetTime)}!`, '✅');
+          broadcastSyncState('caught_up', now);
+        }
+      }, 50);
+      return;
+    }
+
+    // SCENARIO 2: Local user is ahead (localTime > targetTime) -> Remote is behind
+    // Action: Local user pauses and waits while keeping friend's catch-up running!
+    if (diff < -0.4) {
+      ignoreLocalEventsUntil = Date.now() + 1500;
+      simulateMediaControl('pause', localTime);
+      showSyncAlert(`⏸️ Paused: Waiting for ${sender} to catch up (${Math.abs(diff).toFixed(1)}s behind)...`, '⏳');
+      // Tell remote peer to catch up to our local position
+      broadcastSyncState('request_catch_up', localTime);
+    }
+  }
+
+  // Remote Sync Execution & Show Compatibility Check
+  function handleRemoteSyncMessage(msg) {
+    const action = msg.action;
+    const time = msg.time;
+    const sender = msg.userName || 'Friend';
+
+    if (msg.videoId) {
+      remoteVideoId = msg.videoId;
+      remoteTitle = msg.title || 'Friend\'s Show';
+      checkShowSync();
+    }
+
+    const video = document.querySelector('video');
+    const localTime = video ? video.currentTime : lastKnownPlayerTime;
+
+    if (action === 'pause') {
+      currentRemoteTime = time;
+      // If remote paused ahead of us by > 1.8s, catch up to their pause point!
+      if (typeof time === 'number' && (time - localTime) > 1.8) {
+        runCatchUpTo(time, 'pause', sender);
+      } else {
+        stopCatchUp();
+        ignoreLocalEventsUntil = Date.now() + 1500;
+        simulateMediaControl('pause', time);
+        showSyncAlert(`${sender} paused at ${formatTime(time)}`, '⏸️');
+      }
+    } else if (action === 'play') {
+      currentRemoteTime = time;
+      // If remote played ahead of us by > 1.8s, catch up and continue playing
+      if (typeof time === 'number' && (time - localTime) > 1.8) {
+        runCatchUpTo(time, 'play', sender);
+      } else {
+        stopCatchUp();
+        ignoreLocalEventsUntil = Date.now() + 1500;
+        simulateMediaControl('play', time);
+        showSyncAlert(`${sender} played at ${formatTime(time)}`, '▶️');
+      }
+    } else if (action === 'seek') {
+      stopCatchUp();
+      currentRemoteTime = time;
+      ignoreLocalEventsUntil = Date.now() + 1500;
+      simulateMediaControl('seek', time);
+      showSyncAlert(`${sender} jumped to ${formatTime(time)}`, '⏩');
+    } else if (action === 'request_catch_up') {
+      if (typeof time === 'number') {
+        runCatchUpTo(time, isPlayerPaused ? 'pause' : 'play', sender);
+      }
+    } else if (action === 'caught_up') {
+      stopCatchUp();
+      showSyncAlert(`🎯 ${sender} caught up! Both in sync at ${formatTime(time)}`, '✅');
+    } else if (action === 'show_info') {
+      checkShowSync();
+    }
+  }
+
+  function checkShowSync() {
+    const banner = document.getElementById('nps-show-banner');
+    const text = document.getElementById('nps-show-text');
+    const btn = document.getElementById('nps-jump-btn');
+    if (!banner || !text || !btn) return;
+
+    if (remoteVideoId && currentLocalVideoId && remoteVideoId !== currentLocalVideoId) {
+      banner.classList.remove('hidden');
+      banner.classList.add('mismatch');
+      text.textContent = `⚠️ Friend watching: ${remoteTitle || 'Different Episode'}`;
+      btn.style.display = 'block';
+      btn.onclick = () => {
+        window.location.href = `https://www.netflix.com/watch/${remoteVideoId}`;
+      };
+    } else if (currentLocalTitle) {
+      banner.classList.remove('hidden');
+      banner.classList.remove('mismatch');
+      text.textContent = `🎬 ${currentLocalTitle}`;
+      btn.style.display = 'none';
+    }
+  }
+
+  function broadcastSyncState(action, time, extra = {}) {
     const payload = {
       type: 'sync',
       action: action,
       time: time,
       userName: userName,
-      timestamp: Date.now()
+      videoId: currentLocalVideoId,
+      title: currentLocalTitle,
+      timestamp: Date.now(),
+      ...extra
     };
 
     // Priority 1: Send via WebRTC DataChannel (zero-latency P2P)
@@ -825,33 +1057,57 @@
     }
   }
 
-  // Bridge Listener: State changes reported by Netflix player
+  // Bridge Listener: State changes & User interactions reported by Netflix player
   window.addEventListener('message', (event) => {
     if (!event.data || event.data.source !== 'NETFLIX_PARTY_BRIDGE') return;
 
-    const { isPaused, currentTime, duration } = event.data;
-    lastKnownPlayerTime = currentTime;
-    isPlayerPaused = isPaused;
+    if (event.data.type === 'time_update') {
+      const { currentTime, duration, isPaused, metadata } = event.data;
+      lastKnownPlayerTime = currentTime;
+      isPlayerPaused = isPaused;
 
-    // Update UI readout
-    const timecode = document.getElementById('nps-timecode-label');
-    const pillTime = document.getElementById('nps-pill-time');
-    if (timecode) {
-      timecode.textContent = `${formatTime(currentTime)} / ${formatTime(duration)}`;
-    }
-    if (pillTime) {
-      pillTime.textContent = formatTime(currentTime);
-    }
+      if (metadata && metadata.videoId) {
+        if (currentLocalVideoId !== metadata.videoId) {
+          currentLocalVideoId = metadata.videoId;
+          currentLocalTitle = metadata.title || '';
+          checkShowSync();
+          broadcastSyncState('show_info', currentTime);
+        }
+      }
 
-    // If local event happened within remote echo debounce window, ignore
-    if (Date.now() < ignoreLocalEventsUntil) {
+      // Update UI readout only (never broadcasts to network)
+      const timecode = document.getElementById('nps-timecode-label');
+      const pillTime = document.getElementById('nps-pill-time');
+      if (timecode) {
+        timecode.textContent = `${formatTime(currentTime)} / ${formatTime(duration)}`;
+      }
+      if (pillTime) {
+        pillTime.textContent = formatTime(currentTime);
+      }
       return;
     }
 
-    // Determine action to broadcast
-    const action = isPaused ? 'pause' : 'play';
-    broadcastSyncState(action, currentTime);
-    showSyncAlert(isPaused ? 'You paused' : 'You played', isPaused ? '⏸️' : '▶️');
+    // Genuine user action inside Netflix player (Spacebar, Pause button, Play button, Timeline scrub)
+    if (event.data.type === 'user_action') {
+      // Guard against echoing remote executions
+      if (Date.now() < ignoreLocalEventsUntil) {
+        return;
+      }
+
+      const { action, time, metadata } = event.data;
+      lastKnownPlayerTime = time;
+      isPlayerPaused = (action === 'pause');
+
+      if (metadata && metadata.videoId) {
+        currentLocalVideoId = metadata.videoId;
+        currentLocalTitle = metadata.title || '';
+      }
+
+      // Broadcast automatically to friend
+      broadcastSyncState(action, time);
+      showSyncAlert(action === 'pause' ? 'You paused' : (action === 'seek' ? 'You jumped' : 'You played'), 
+                    action === 'pause' ? '⏸️' : (action === 'seek' ? '⏩' : '▶️'));
+    }
   });
 
   // Storage / Settings initialization
@@ -860,6 +1116,8 @@
       if (config.roomId) roomId = config.roomId;
       if (config.serverUrl) serverWsUrl = config.serverUrl;
       if (config.userName) userName = config.userName;
+      if (typeof config.audioEnabled === 'boolean') isAudioEnabled = config.audioEnabled;
+      if (typeof config.videoEnabled === 'boolean') isVideoEnabled = config.videoEnabled;
 
       // Auto-detect ws vs wss and host if serverWsUrl is default localhost and page is loaded elsewhere
       if (serverWsUrl.includes('localhost') && window.location.hostname && window.location.hostname !== 'localhost') {
@@ -880,7 +1138,7 @@
     }
 
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-      chrome.storage.local.get(['roomId', 'serverUrl', 'userName'], (res) => {
+      chrome.storage.local.get(['roomId', 'serverUrl', 'userName', 'audioEnabled', 'videoEnabled'], (res) => {
         onConfigLoaded(res || {});
       });
     } else {

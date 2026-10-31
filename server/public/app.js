@@ -496,26 +496,102 @@
   }
 
   // Playback Synchronization Logic
+  let catchUpInterval = null;
+
+  function stopCatchUp() {
+    if (catchUpInterval) {
+      clearInterval(catchUpInterval);
+      catchUpInterval = null;
+    }
+  }
+
+  function runCatchUpTo(targetTime, desiredAction = 'pause', sender = 'Friend') {
+    stopCatchUp();
+    const diff = targetTime - currentTime;
+
+    if (Math.abs(diff) <= 0.4) {
+      currentTime = targetTime;
+      isPlaying = (desiredAction === 'play');
+      timecodeDisplay.textContent = formatTime(currentTime);
+      updatePlayPauseUI();
+      showBanner(`🎯 In sync with ${sender}! (${formatTime(targetTime)})`, desiredAction === 'pause' ? '⏸️' : '▶️');
+      return;
+    }
+
+    if (diff > 0.4) {
+      isPlaying = true;
+      updatePlayPauseUI();
+      showBanner(`⏩ Catching up to ${sender} (${diff.toFixed(1)}s behind)...`, '⚡');
+
+      catchUpInterval = setInterval(() => {
+        currentTime += 0.2;
+        timecodeDisplay.textContent = formatTime(currentTime);
+        if (currentTime >= targetTime - 0.25 || currentTime > targetTime) {
+          stopCatchUp();
+          currentTime = targetTime;
+          isPlaying = (desiredAction === 'play');
+          timecodeDisplay.textContent = formatTime(currentTime);
+          updatePlayPauseUI();
+          showBanner(`🎯 Caught up to ${sender} at ${formatTime(targetTime)}!`, '✅');
+          broadcastAction('caught_up', currentTime);
+        }
+      }, 50);
+    } else {
+      isPlaying = false;
+      updatePlayPauseUI();
+      showBanner(`⏸️ Paused: Waiting for ${sender} to catch up (${Math.abs(diff).toFixed(1)}s behind)...`, '⏳');
+      broadcastAction('request_catch_up', currentTime);
+    }
+  }
+
   function handleSyncMessage(msg) {
     const action = msg.action;
     const time = msg.time;
     const sender = msg.userName || 'Friend';
 
-    if (typeof time === 'number') {
-      currentTime = time;
-      timecodeDisplay.textContent = formatTime(currentTime);
+    if (msg.title) {
+      const banner = document.getElementById('mobile-show-banner');
+      const titleSpan = document.getElementById('mobile-show-title');
+      if (banner && titleSpan) {
+        titleSpan.textContent = `🎬 ${msg.title}`;
+        banner.style.display = 'block';
+      }
     }
 
     if (action === 'pause') {
-      isPlaying = false;
-      updatePlayPauseUI();
-      showBanner(`${sender} paused at ${formatTime(time)}`, '⏸️');
+      if (typeof time === 'number' && (time - currentTime) > 1.8) {
+        runCatchUpTo(time, 'pause', sender);
+      } else {
+        stopCatchUp();
+        if (typeof time === 'number') currentTime = time;
+        timecodeDisplay.textContent = formatTime(currentTime);
+        isPlaying = false;
+        updatePlayPauseUI();
+        showBanner(`${sender} paused at ${formatTime(time)}`, '⏸️');
+      }
     } else if (action === 'play') {
-      isPlaying = true;
-      updatePlayPauseUI();
-      showBanner(`${sender} played at ${formatTime(time)}`, '▶️');
+      if (typeof time === 'number' && (time - currentTime) > 1.8) {
+        runCatchUpTo(time, 'play', sender);
+      } else {
+        stopCatchUp();
+        if (typeof time === 'number') currentTime = time;
+        timecodeDisplay.textContent = formatTime(currentTime);
+        isPlaying = true;
+        updatePlayPauseUI();
+        showBanner(`${sender} played at ${formatTime(time)}`, '▶️');
+      }
     } else if (action === 'seek') {
+      stopCatchUp();
+      if (typeof time === 'number') currentTime = time;
+      timecodeDisplay.textContent = formatTime(currentTime);
       showBanner(`${sender} jumped to ${formatTime(time)}`, '⏩');
+    } else if (action === 'request_catch_up') {
+      if (typeof time === 'number') {
+        runCatchUpTo(time, isPlaying ? 'play' : 'pause', sender);
+      }
+    } else if (action === 'caught_up') {
+      stopCatchUp();
+      showBanner(`🎯 ${sender} caught up! In sync at ${formatTime(time)}`, '✅');
     }
   }
 
@@ -560,6 +636,14 @@
     broadcastAction(action, currentTime);
     showBanner(`You ${action}ed playback`, isPlaying ? '▶️' : '⏸️');
   });
+
+  const btnMobileCatchup = document.getElementById('btn-mobile-catchup');
+  if (btnMobileCatchup) {
+    btnMobileCatchup.addEventListener('click', () => {
+      broadcastAction('request_catch_up', currentTime);
+      showBanner('🎯 Sent catch-up request to friend', '📡');
+    });
+  }
 
   // Fast Forward / Rewind
   btnSeekBack.addEventListener('click', () => {
