@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
   chrome.storage.local.get(['roomId', 'userName', 'serverUrl'], (res) => {
     roomInput.value = res.roomId || 'PARTY77';
     nameInput.value = res.userName || 'Friend';
-    serverInput.value = res.serverUrl || 'ws://localhost:8000/ws';
+    serverInput.value = res.serverUrl || 'cloud';
   });
 
   // Random Room Code

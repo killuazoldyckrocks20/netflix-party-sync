@@ -47,7 +47,7 @@
   const btnLeave = document.getElementById('btn-leave');
 
   // State
-  let ws = null;
+  let sigClient = null;
   let pc = null;
   let dataChannel = null;
   let localStream = null;
@@ -378,12 +378,12 @@
     };
 
     pc.onicecandidate = (event) => {
-      if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
+      if (event.candidate && sigClient) {
+        sigClient.send({
           type: 'signal',
           targetId: targetPeerId,
           signal: { candidate: event.candidate }
-        }));
+        });
       }
     };
 
@@ -392,11 +392,13 @@
       const enhancedSdp = optimizeOpusSDP(offer.sdp);
       await pc.setLocalDescription({ type: offer.type, sdp: enhancedSdp });
       applyHighBitrateSenders();
-      ws.send(JSON.stringify({
-        type: 'signal',
-        targetId: targetPeerId,
-        signal: { sdp: pc.localDescription }
-      }));
+      if (sigClient) {
+        sigClient.send({
+          type: 'signal',
+          targetId: targetPeerId,
+          signal: { sdp: pc.localDescription }
+        });
+      }
     }
   }
 
@@ -410,61 +412,57 @@
     };
   }
 
-  // WebSocket Signaling Connection
+  // Universal Cloud & Local Signaling Connection
   function initWebSocket() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
-
-    try {
-      ws = new WebSocket(wsUrl);
-    } catch (e) {
-      console.error('[WS] Connection failed:', e);
-      return;
+    if (sigClient) {
+      try { sigClient.close(); } catch (e) {}
     }
 
-    ws.onopen = () => {
-      statusDot.className = 'status-dot connected';
-      ws.send(JSON.stringify({
-        type: 'join',
-        roomId: roomId,
-        peerId: peerId,
-        userName: userName
-      }));
-    };
+    let serverMode = 'cloud';
+    const host = window.location.host;
+    if (host.includes('localhost') || host.includes('127.0.0.1')) {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      serverMode = `${protocol}//${host}/ws`;
+    }
 
-    ws.onmessage = async (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'joined') {
-          if (msg.peers && msg.peers.length > 0) {
-            const peer = msg.peers[0];
-            updateFriendInfo(peer.userName);
-            await createPeerConnection(true, peer.peerId);
+    sigClient = new UniversalSignalingClient({
+      roomId: roomId,
+      peerId: peerId,
+      userName: userName,
+      serverUrl: serverMode,
+      onStatusChange: (status) => {
+        statusDot.className = status === 'connected' ? 'status-dot connected' : 'status-dot disconnected';
+      },
+      onMessage: async (msg) => {
+        try {
+          if (msg.type === 'joined') {
+            if (msg.peers && msg.peers.length > 0) {
+              const peer = msg.peers[0];
+              updateFriendInfo(peer.userName);
+              await createPeerConnection(true, peer.peerId);
+            }
+          } else if (msg.type === 'peer-joined') {
+            updateFriendInfo(msg.userName);
+            showBanner(`${msg.userName} joined!`, '👋');
+            await createPeerConnection(false, msg.peerId);
+          } else if (msg.type === 'signal') {
+            handleSignaling(msg.signal, msg.senderId);
+          } else if (msg.type === 'sync') {
+            handleSyncMessage(msg);
+          } else if (msg.type === 'peer-left') {
+            showBanner(`${msg.userName || 'Friend'} disconnected`, '👋');
+            remoteVideo.srcObject = null;
+            remoteVideo.classList.add('hidden');
+            avatarView.classList.remove('hidden');
+            updateFriendInfo('Friend left');
           }
-        } else if (msg.type === 'peer-joined') {
-          updateFriendInfo(msg.userName);
-          showBanner(`${msg.userName} joined!`, '👋');
-          await createPeerConnection(false, msg.peerId);
-        } else if (msg.type === 'signal') {
-          handleSignaling(msg.signal, msg.senderId);
-        } else if (msg.type === 'sync') {
-          handleSyncMessage(msg);
-        } else if (msg.type === 'peer-left') {
-          showBanner(`${msg.userName || 'Friend'} disconnected`, '👋');
-          remoteVideo.srcObject = null;
-          remoteVideo.classList.add('hidden');
-          avatarView.classList.remove('hidden');
-          updateFriendInfo('Friend left');
+        } catch (e) {
+          console.error('[Signaling Parse]', e);
         }
-      } catch (e) {
-        console.error('[WS Parse]', e);
       }
-    };
+    });
 
-    ws.onclose = () => {
-      statusDot.className = 'status-dot disconnected';
-      setTimeout(initWebSocket, 4000);
-    };
+    sigClient.connect();
   }
 
   async function handleSignaling(signal, senderId) {
@@ -477,11 +475,13 @@
         const enhancedSdp = optimizeOpusSDP(answer.sdp);
         await pc.setLocalDescription({ type: answer.type, sdp: enhancedSdp });
         applyHighBitrateSenders();
-        ws.send(JSON.stringify({
-          type: 'signal',
-          targetId: senderId,
-          signal: { sdp: pc.localDescription }
-        }));
+        if (sigClient) {
+          sigClient.send({
+            type: 'signal',
+            targetId: senderId,
+            signal: { sdp: pc.localDescription }
+          });
+        }
       }
     } else if (signal.candidate) {
       try {
@@ -531,8 +531,8 @@
     if (dataChannel && dataChannel.readyState === 'open') {
       dataChannel.send(JSON.stringify(payload));
     }
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(payload));
+    if (sigClient) {
+      sigClient.send(payload);
     }
   }
 
@@ -589,13 +589,13 @@
     const val = parseInt(e.target.value, 10);
     netflixVolVal.textContent = `${val}%`;
     // Broadcast requested netflix volume adjustment to laptop
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
+    if (sigClient) {
+      sigClient.send({
         type: 'sync',
         action: 'volume',
         time: val / 100,
         userName: userName
-      }));
+      });
     }
   });
 

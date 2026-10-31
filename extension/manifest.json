@@ -8,6 +8,7 @@
   ],
   "host_permissions": [
     "https://*.netflix.com/*",
+    "https://*.github.io/*",
     "http://localhost:*/*",
     "http://127.0.0.1:*/*"
   ],
@@ -19,10 +20,12 @@
     {
       "matches": [
         "https://*.netflix.com/*",
+        "https://*.github.io/*",
         "http://localhost:8000/*",
         "http://127.0.0.1:8000/*"
       ],
       "js": [
+        "signaling.js",
         "content.js"
       ],
       "css": [
@@ -38,6 +41,7 @@
       ],
       "matches": [
         "https://*.netflix.com/*",
+        "https://*.github.io/*",
         "http://localhost:8000/*",
         "http://127.0.0.1:8000/*"
       ]

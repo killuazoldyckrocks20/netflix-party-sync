@@ -30,7 +30,7 @@
   injectBridge();
 
   // State
-  let ws = null;
+  let sigClient = null;
   let pc = null;
   let localStream = null;
   let remoteStream = null;
@@ -38,10 +38,10 @@
   let friendGainNode = null;
   let dataChannel = null;
 
-  let roomId = 'SYNC77';
+  let roomId = 'PARTY77';
   let peerId = 'peer-' + Math.random().toString(36).substring(2, 9);
   let userName = 'You';
-  let serverWsUrl = 'ws://localhost:8000/ws';
+  let serverWsUrl = 'cloud'; // Default: Serverless Cloud Mode (0 local servers needed)
 
   let isAudioEnabled = true;
   let isVideoEnabled = true;
@@ -631,12 +631,12 @@
 
     // ICE Candidates
     pc.onicecandidate = (event) => {
-      if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
+      if (event.candidate && sigClient) {
+        sigClient.send({
           type: 'signal',
           targetId: targetPeerId,
           signal: { candidate: event.candidate }
-        }));
+        });
       }
     };
 
@@ -645,11 +645,13 @@
       const enhancedSdp = optimizeOpusSDP(offer.sdp);
       await pc.setLocalDescription({ type: offer.type, sdp: enhancedSdp });
       applyHighBitrateSenders();
-      ws.send(JSON.stringify({
-        type: 'signal',
-        targetId: targetPeerId,
-        signal: { sdp: pc.localDescription }
-      }));
+      if (sigClient) {
+        sigClient.send({
+          type: 'signal',
+          targetId: targetPeerId,
+          signal: { sdp: pc.localDescription }
+        });
+      }
     }
   }
 
@@ -663,74 +665,54 @@
     };
   }
 
-  // WebSocket Signaling Connection
+  // Universal Cloud / Local Signaling Connection
   function initWebSocket() {
-    if (ws) {
-      try { ws.close(); } catch (e) {}
+    if (sigClient) {
+      try { sigClient.close(); } catch (e) {}
     }
 
     const dot = document.getElementById('nps-status-dot');
     const pillDot = document.getElementById('nps-pill-dot');
 
-    try {
-      ws = new WebSocket(serverWsUrl);
-    } catch (e) {
-      console.error('[WS] Failed to connect to server:', e);
-      return;
-    }
-
-    ws.onopen = () => {
-      console.log('[WS] Connected to signaling server.');
-      if (dot) dot.className = 'nps-status-dot connected';
-      if (pillDot) pillDot.className = 'nps-status-dot connected';
-
-      ws.send(JSON.stringify({
-        type: 'join',
-        roomId: roomId,
-        peerId: peerId,
-        userName: userName
-      }));
-    };
-
-    ws.onmessage = async (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'joined') {
-          console.log('[WS] Joined room', msg.roomId, 'Existing peers:', msg.peers);
-          if (msg.peers && msg.peers.length > 0) {
-            // Initiate WebRTC call with the first peer
-            const peer = msg.peers[0];
-            updateFriendInfo(peer.userName);
-            await createPeerConnection(true, peer.peerId);
+    sigClient = new UniversalSignalingClient({
+      roomId: roomId,
+      peerId: peerId,
+      userName: userName,
+      serverUrl: serverWsUrl,
+      onStatusChange: (status) => {
+        const isConn = status === 'connected';
+        if (dot) dot.className = isConn ? 'nps-status-dot connected' : 'nps-status-dot disconnected';
+        if (pillDot) pillDot.className = isConn ? 'nps-status-dot connected' : 'nps-status-dot disconnected';
+      },
+      onMessage: async (msg) => {
+        try {
+          if (msg.type === 'joined') {
+            console.log('[Signaling] Joined room', msg.roomId, 'Existing peers:', msg.peers);
+            if (msg.peers && msg.peers.length > 0) {
+              const peer = msg.peers[0];
+              updateFriendInfo(peer.userName);
+              await createPeerConnection(true, peer.peerId);
+            }
+          } else if (msg.type === 'peer-joined') {
+            console.log('[Signaling] Peer joined room:', msg.peerId);
+            updateFriendInfo(msg.userName);
+            showSyncAlert(`${msg.userName} joined!`, '👋');
+            await createPeerConnection(false, msg.peerId);
+          } else if (msg.type === 'signal') {
+            handleSignalingData(msg.signal, msg.senderId);
+          } else if (msg.type === 'sync') {
+            handleRemoteSyncMessage(msg);
+          } else if (msg.type === 'peer-left') {
+            showSyncAlert(`${msg.userName || 'Friend'} left`, '👋');
+            resetFriendUI();
           }
-        } else if (msg.type === 'peer-joined') {
-          console.log('[WS] Peer joined room:', msg.peerId);
-          updateFriendInfo(msg.userName);
-          showSyncAlert(`${msg.userName} joined!`, '👋');
-          await createPeerConnection(false, msg.peerId);
-        } else if (msg.type === 'signal') {
-          handleSignalingData(msg.signal, msg.senderId);
-        } else if (msg.type === 'sync') {
-          handleRemoteSyncMessage(msg);
-        } else if (msg.type === 'peer-left') {
-          showSyncAlert(`${msg.userName || 'Friend'} left`, '👋');
-          resetFriendUI();
+        } catch (e) {
+          console.error('[Signaling Message Error]', e);
         }
-      } catch (e) {
-        console.error('[WS Message Error]', e);
       }
-    };
+    });
 
-    ws.onclose = () => {
-      if (dot) dot.className = 'nps-status-dot disconnected';
-      if (pillDot) pillDot.className = 'nps-status-dot disconnected';
-      console.warn('[WS] Closed. Retrying in 4s...');
-      setTimeout(initWebSocket, 4000);
-    };
-
-    ws.onerror = (err) => {
-      console.warn('[WS Error]', err);
-    };
+    sigClient.connect();
   }
 
   async function handleSignalingData(signal, senderId) {
@@ -745,11 +727,13 @@
         const enhancedSdp = optimizeOpusSDP(answer.sdp);
         await pc.setLocalDescription({ type: answer.type, sdp: enhancedSdp });
         applyHighBitrateSenders();
-        ws.send(JSON.stringify({
-          type: 'signal',
-          targetId: senderId,
-          signal: { sdp: pc.localDescription }
-        }));
+        if (sigClient) {
+          sigClient.send({
+            type: 'signal',
+            targetId: senderId,
+            signal: { sdp: pc.localDescription }
+          });
+        }
       }
     } else if (signal.candidate) {
       try {
@@ -835,9 +819,9 @@
       dataChannel.send(JSON.stringify(payload));
     }
 
-    // Priority 2: Also relay via WebSocket server so both peers stay synced regardless of P2P state
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(payload));
+    // Priority 2: Also relay via Serverless Cloud Signaling so both peers stay synced regardless of P2P state
+    if (sigClient) {
+      sigClient.send(payload);
     }
   }
 

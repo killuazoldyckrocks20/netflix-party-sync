@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#121212">
+  <title>Netflix Party Sync & Video Call</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-badge">NPS</span>
+        <h1>Netflix Sync</h1>
+      </div>
+      <div class="room-tag" id="room-tag">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="room-code-display">OFFLINE</span>
+      </div>
+    </header>
+
+    <!-- Join Screen -->
+    <section class="join-card" id="join-card">
+      <h2>Join Watch Party</h2>
+      <p>Connect with your friend, sync playback, and talk with 2-way video call while watching Netflix.</p>
+      
+      <div class="form-field">
+        <label for="input-room">Room Code</label>
+        <input type="text" id="input-room" placeholder="PARTY77" uppercase>
+      </div>
+
+      <div class="form-field">
+        <label for="input-name">Your Name</label>
+        <input type="text" id="input-name" placeholder="Alice">
+      </div>
+
+      <button class="btn-primary" id="btn-join">
+        🚀 Join Party
+      </button>
+
+      <p style="font-size: 11px; text-align: center; color: #888; margin-top: 6px;">
+        💡 On phone, tap <b>PiP</b> on the video feed to keep your friend's video floating while switching to the Netflix app!
+      </p>
+    </section>
+
+    <!-- Active Party View -->
+    <main class="active-party hidden" id="party-view" style="display: flex; flex-direction: column; gap: 16px;">
+      <!-- Video Call Stage -->
+      <section class="video-card">
+        <video class="remote-stream hidden" id="remote-video" autoplay playsinline></video>
+        
+        <div class="avatar-view" id="avatar-view">
+          <div class="avatar-large" id="avatar-circle">?</div>
+          <div class="avatar-name" id="avatar-name">Connecting with friend...</div>
+        </div>
+
+        <!-- Picture-in-Picture Button for Mobile -->
+        <button class="pip-btn" id="btn-pip" title="Floating Picture-in-Picture">
+          🪟 PiP
+        </button>
+
+        <!-- Self Preview -->
+        <div class="self-pip" id="self-pip">
+          <video class="self-video" id="local-video" autoplay playsinline muted></video>
+        </div>
+      </section>
+
+      <!-- Transient Sync Alert Banner -->
+      <div class="sync-banner hidden" id="sync-banner">
+        <span id="sync-banner-icon">🎬</span>
+        <span id="sync-banner-text">Playback synced</span>
+      </div>
+
+      <!-- Master Playback Controller -->
+      <section class="controller-card">
+        <div class="controller-header">
+          <span class="controller-title">Synced Playback</span>
+          <span class="sync-state-pill" id="sync-state-pill">STANDBY</span>
+        </div>
+
+        <div style="display: flex; align-items: baseline; justify-content: space-between;">
+          <div class="timecode-display" id="timecode-display">00:00:00</div>
+          <div style="display: flex; gap: 8px;">
+            <button class="tool-btn" id="btn-seek-back" style="width: 36px; height: 36px; font-size: 13px;" title="Rewind 10s">⏪ 10</button>
+            <button class="tool-btn" id="btn-seek-fwd" style="width: 36px; height: 36px; font-size: 13px;" title="Fast forward 10s">10 ⏩</button>
+          </div>
+        </div>
+
+        <!-- Giant Tactile Play / Pause Sync Button -->
+        <button class="big-sync-btn" id="btn-master-playpause">
+          <span id="playpause-icon">⏸️</span>
+          <span id="playpause-label">Pause Playback</span>
+        </button>
+
+        <!-- Open Netflix App Deep Link -->
+        <a href="https://www.netflix.com" target="_blank" class="netflix-app-btn" id="btn-open-netflix">
+          🍿 Open in Netflix App
+        </a>
+      </section>
+
+      <!-- Individual Audio Mixer Card -->
+      <section class="mixer-card">
+        <!-- Friend Voice Volume (up to 200% boost) -->
+        <div class="slider-group">
+          <div class="slider-header">
+            <span>🎙️ Friend's Voice Volume</span>
+            <span class="slider-val" id="friend-vol-val">100%</span>
+          </div>
+          <input type="range" class="range-slider" id="friend-vol-slider" min="0" max="200" value="100">
+        </div>
+
+        <!-- Netflix Audio Volume -->
+        <div class="slider-group">
+          <div class="slider-header">
+            <span>🎬 Netflix Media Audio</span>
+            <span class="slider-val" id="netflix-vol-val">80%</span>
+          </div>
+          <input type="range" class="range-slider" id="netflix-vol-slider" min="0" max="100" value="80">
+        </div>
+
+        <!-- Microphone Level & Headphone Isolation Status -->
+        <div class="slider-group">
+          <div class="slider-header">
+            <span>🎤 Mic Input (Studio 48kHz)</span>
+            <span class="sync-state-pill playing" id="phone-a2dp-badge" style="font-size: 10px; padding: 2px 6px;">🎧 A2DP SAFE</span>
+          </div>
+          <div style="width: 100%; height: 6px; background: #333; border-radius: 4px; overflow: hidden; margin-top: 4px;">
+            <div id="mic-meter-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #46D369 0%, #FFAA00 85%, #E50914 100%); transition: width 0.06s ease-out;"></div>
+          </div>
+          <div style="font-size: 11px; color: #888; display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+            <span>Mic Source:</span>
+            <select id="phone-mic-select" style="background: #252525; color: #ccc; border: 1px solid #444; border-radius: 4px; font-size: 11px; padding: 2px 6px; outline: none; max-width: 180px;"></select>
+          </div>
+        </div>
+      </section>
+
+      <!-- Bottom Controls Toolbar -->
+      <footer class="toolbar-card">
+        <button class="tool-btn" id="btn-mic" title="Mute/Unmute Mic">🎙️</button>
+        <button class="tool-btn" id="btn-cam" title="Toggle Camera">📹</button>
+        <button class="tool-btn" id="btn-share" title="Share Room Link">🔗</button>
+        <button class="tool-btn leave" id="btn-leave" title="Leave Party">✕</button>
+      </footer>
+    </main>
+  </div>
+
+  <script src="signaling.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
