@@ -71,7 +71,31 @@ A complete web application and Chrome extension system that lets you watch Netfl
 
 ---
 
-## 🚀 Quick Start Guide
+## 🌐 Zero-Server GitHub Pages Deployment
+
+You can host this entire app on **GitHub Pages** with **ZERO local server running anywhere**, exactly like `https://killuazoldyckrocks20.github.io/nfc_reader/`!
+
+### How It Works Without a Local Server:
+- The web app and extension connect via a built-in **Serverless Cloud Signaling Client** (`signaling.js` via free 24/7 public broker `wss://broker.emqx.io:8084/mqtt`).
+- Initial room joining and WebRTC SDP handshakes happen over this cloud broker.
+- Once connected, **2-way audio, video, and playback sync travel directly Peer-to-Peer (WebRTC DataChannel)** with zero latency.
+- Neither you nor your friend ever have to run a terminal command, python server, or Docker container!
+
+### How to Host on Your GitHub Pages:
+1. Push this repository to GitHub under your account:
+   ```bash
+   git remote add origin https://github.com/killuazoldyckrocks20/netflix-party-sync.git
+   git push -u origin main
+   ```
+2. In your GitHub repository, go to **Settings ➔ Pages**.
+3. Under **Branch**, select `main` and folder `/ (root)`. Click **Save**.
+4. In ~60 seconds, your app is live worldwide at:
+   `https://killuazoldyckrocks20.github.io/netflix-party-sync/?room=PARTY77`
+5. Share that URL with your friend: they open it on their phone or laptop, tap Join, and you're immediately watching in sync!
+
+---
+
+## 🚀 Quick Start Guide (Optional Local Server Mode)
 
 ### Step 1: Start the Server
 
