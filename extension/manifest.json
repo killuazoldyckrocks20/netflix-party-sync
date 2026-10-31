@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "Netflix Party Sync & Video Call",
+  "version": "1.0.0",
+  "description": "Watch Netflix in sync with friends, with 2-way video call overlay and individual audio mixing.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://*.netflix.com/*",
+    "http://localhost:*/*",
+    "http://127.0.0.1:*/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Netflix Party Sync Settings"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.netflix.com/*",
+        "http://localhost:8000/*",
+        "http://127.0.0.1:8000/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "overlay.css"
+      ],
+      "run_at": "document_end"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "netflix_bridge.js"
+      ],
+      "matches": [
+        "https://*.netflix.com/*",
+        "http://localhost:8000/*",
+        "http://127.0.0.1:8000/*"
+      ]
+    }
+  ],
+  "icons": {
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

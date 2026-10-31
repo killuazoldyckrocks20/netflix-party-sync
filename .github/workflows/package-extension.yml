@@ -1,0 +1,37 @@
+name: Package Chrome Extension & Deploy
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  release:
+    types: [ created ]
+  workflow_dispatch:
+
+jobs:
+  build-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create Extension Zip
+        run: |
+          mkdir -p dist
+          cd extension
+          zip -r ../dist/netflix-party-sync-extension.zip ./*
+          cd ..
+          echo "Package created at dist/netflix-party-sync-extension.zip"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: netflix-party-sync-extension
+          path: dist/netflix-party-sync-extension.zip
+
+      - name: Attach Zip to Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/netflix-party-sync-extension.zip
