@@ -63,5 +63,11 @@
   "icons": {
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "netflix-party-sync@killuazoldyck.github.io",
+      "strict_min_version": "109.0"
+    }
   }
 }
