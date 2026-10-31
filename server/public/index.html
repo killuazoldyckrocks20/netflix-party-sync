@@ -83,11 +83,17 @@
         </div>
 
         <div style="display: flex; align-items: baseline; justify-content: space-between;">
-          <div class="timecode-display" id="timecode-display">00:00:00</div>
+          <div class="timecode-display" id="timecode-display">00:00</div>
           <div style="display: flex; gap: 8px;">
             <button class="tool-btn" id="btn-seek-back" style="width: 36px; height: 36px; font-size: 13px;" title="Rewind 10s">⏪ 10</button>
             <button class="tool-btn" id="btn-seek-fwd" style="width: 36px; height: 36px; font-size: 13px;" title="Fast forward 10s">10 ⏩</button>
           </div>
+        </div>
+
+        <!-- Netflix Remote Quick Actions (NetflixController pattern) -->
+        <div style="display: flex; gap: 8px; margin-top: 8px;">
+          <button class="tool-btn" id="btn-skip-intro" style="flex: 1; height: 34px; font-size: 11px; font-weight: 600; background: rgba(255,255,255,0.08); border-radius: 6px;" title="Remotely click Netflix Skip Intro button">⏭️ Skip Intro</button>
+          <button class="tool-btn" id="btn-next-ep" style="flex: 1; height: 34px; font-size: 11px; font-weight: 600; background: rgba(255,255,255,0.08); border-radius: 6px;" title="Remotely click Next Episode button">⏭️ Next Episode</button>
         </div>
 
         <!-- Giant Tactile Play / Pause Sync Button -->

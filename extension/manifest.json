@@ -21,8 +21,21 @@
       "matches": [
         "https://*.netflix.com/*",
         "https://*.github.io/*",
-        "http://localhost:8000/*",
-        "http://127.0.0.1:8000/*"
+        "http://localhost:*/*",
+        "http://127.0.0.1:*/*"
+      ],
+      "js": [
+        "netflix_bridge.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://*.netflix.com/*",
+        "https://*.github.io/*",
+        "http://localhost:*/*",
+        "http://127.0.0.1:*/*"
       ],
       "js": [
         "signaling.js",

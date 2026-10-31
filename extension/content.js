@@ -296,22 +296,92 @@
       }
     });
 
-    // Mic Toggle (Independent Mute/Unmute)
-    micBtn.addEventListener('click', () => {
-      isAudioEnabled = !isAudioEnabled;
-      if (localStream) {
-        localStream.getAudioTracks().forEach(t => t.enabled = isAudioEnabled);
+    // Mic Toggle (Independent Mute/Unmute & On-Demand Request)
+    micBtn.addEventListener('click', async () => {
+      const audioTracks = localStream ? localStream.getAudioTracks() : [];
+      if (audioTracks.length === 0) {
+        // Microphone was previously blocked or not granted - request individually now
+        try {
+          const audioStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+              sampleRate: { ideal: 48000 },
+              channelCount: { ideal: 2 }
+            }
+          });
+          const newTrack = audioStream.getAudioTracks()[0];
+          if (newTrack) {
+            localStream.addTrack(newTrack);
+            if (pc) {
+              const sender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
+              if (sender) {
+                await sender.replaceTrack(newTrack);
+              } else {
+                pc.addTrack(newTrack, localStream);
+              }
+              applyHighBitrateSenders();
+            }
+            isAudioEnabled = true;
+            setupLocalMicMeter(localStream);
+            const inputs = await getAudioInputDevices();
+            populateMicSelect(inputs, newTrack.getSettings()?.deviceId);
+            updateMediaUI();
+            showSyncAlert('Microphone Active', '🎙️');
+            return;
+          }
+        } catch (e) {
+          isAudioEnabled = false;
+          updateMediaUI();
+          showSyncAlert('Microphone blocked by browser', '🚫');
+          return;
+        }
       }
+
+      isAudioEnabled = !isAudioEnabled;
+      localStream.getAudioTracks().forEach(t => t.enabled = isAudioEnabled);
       updateMediaUI();
       showSyncAlert(isAudioEnabled ? 'Microphone Active' : 'Microphone Disabled', isAudioEnabled ? '🎙️' : '🔇');
     });
 
-    // Camera Toggle (Independent Video Enable/Disable)
-    camBtn.addEventListener('click', () => {
-      isVideoEnabled = !isVideoEnabled;
-      if (localStream) {
-        localStream.getVideoTracks().forEach(t => t.enabled = isVideoEnabled);
+    // Camera Toggle (Independent Video Enable/Disable & On-Demand Request)
+    camBtn.addEventListener('click', async () => {
+      const videoTracks = localStream ? localStream.getVideoTracks() : [];
+      if (videoTracks.length === 0) {
+        // Camera was previously blocked or not granted - request individually now
+        try {
+          const videoStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { max: 24 }, facingMode: 'user' }
+          });
+          const newTrack = videoStream.getVideoTracks()[0];
+          if (newTrack) {
+            localStream.addTrack(newTrack);
+            const localVideo = document.getElementById('nps-local-video');
+            if (localVideo) localVideo.srcObject = localStream;
+            if (pc) {
+              const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+              if (sender) {
+                await sender.replaceTrack(newTrack);
+              } else {
+                pc.addTrack(newTrack, localStream);
+              }
+            }
+            isVideoEnabled = true;
+            updateMediaUI();
+            showSyncAlert('Camera Active', '📹');
+            return;
+          }
+        } catch (e) {
+          isVideoEnabled = false;
+          updateMediaUI();
+          showSyncAlert('Camera blocked by browser', '🚫');
+          return;
+        }
       }
+
+      isVideoEnabled = !isVideoEnabled;
+      localStream.getVideoTracks().forEach(t => t.enabled = isVideoEnabled);
       updateMediaUI();
       showSyncAlert(isVideoEnabled ? 'Camera Active' : 'Camera Disabled', isVideoEnabled ? '📹' : '🚫');
     });
@@ -606,47 +676,83 @@
   }
 
   async function initLocalMedia() {
-    try {
-      localStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,    // Eliminates acoustic leakage from loud headphones
-          noiseSuppression: true,    // Cuts laptop fan hum, AC hum, keyboard clicks
-          autoGainControl: true,     // Balances voice level
-          sampleRate: { ideal: 48000 },
-          channelCount: { ideal: 2 }
-        },
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { max: 24 } }
-      });
+    localStream = new MediaStream();
 
-      // Apply initial audio/video toggle preferences
-      localStream.getAudioTracks().forEach(t => t.enabled = isAudioEnabled);
-      localStream.getVideoTracks().forEach(t => t.enabled = isVideoEnabled);
-      updateMediaUI();
-
-      // Discover devices and ensure Built-in mic is picked (locking Bluetooth in A2DP)
-      const inputs = await getAudioInputDevices();
-      const bestBuiltIn = pickBestBuiltInMic(inputs);
-
-      if (bestBuiltIn && bestBuiltIn.deviceId) {
-        activeMicDeviceId = bestBuiltIn.deviceId;
-        const currentLabel = localStream.getAudioTracks()[0]?.label || '';
-        const btKeywords = [/airpods/i, /bluetooth/i, /headset/i, /wh-1000/i, /bose/i, /galaxy buds/i];
-        if (btKeywords.some(p => p.test(currentLabel)) && bestBuiltIn.deviceId !== localStream.getAudioTracks()[0]?.getSettings()?.deviceId) {
-          await switchMicrophone(bestBuiltIn.deviceId);
+    // 1. Prompt for Microphone permission FIRST (if enabled in user settings)
+    if (isAudioEnabled) {
+      try {
+        const audioStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,    // Eliminates acoustic leakage from loud headphones
+            noiseSuppression: true,    // Cuts laptop fan hum, AC hum, keyboard clicks
+            autoGainControl: true,     // Balances voice level
+            sampleRate: { ideal: 48000 },
+            channelCount: { ideal: 2 }
+          }
+        });
+        const aTrack = audioStream.getAudioTracks()[0];
+        if (aTrack) {
+          localStream.addTrack(aTrack);
+          isAudioEnabled = true;
+          console.log('[Media] Microphone permission granted.');
         }
-        populateMicSelect(inputs, activeMicDeviceId);
-      } else {
-        populateMicSelect(inputs, localStream.getAudioTracks()[0]?.getSettings()?.deviceId);
+      } catch (audioErr) {
+        console.warn('[Media] Microphone permission blocked or unavailable:', audioErr);
+        isAudioEnabled = false;
       }
+    } else {
+      isAudioEnabled = false;
+    }
 
-      const localVideo = document.getElementById('nps-local-video');
-      if (localVideo) {
-        localVideo.srcObject = localStream;
+    // 2. Prompt for Camera permission SECOND (one after another)
+    if (isVideoEnabled) {
+      try {
+        const videoStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { max: 24 }, facingMode: 'user' }
+        });
+        const vTrack = videoStream.getVideoTracks()[0];
+        if (vTrack) {
+          localStream.addTrack(vTrack);
+          isVideoEnabled = true;
+          console.log('[Media] Camera permission granted.');
+        }
+      } catch (videoErr) {
+        console.warn('[Media] Camera permission blocked or unavailable:', videoErr);
+        isVideoEnabled = false;
       }
-      setupLocalMicMeter(localStream);
-    } catch (err) {
-      console.warn('[WebRTC] Camera/Mic access denied or unavailable. Joining in sync-only mode.', err);
-      localStream = new MediaStream();
+    } else {
+      isVideoEnabled = false;
+    }
+
+    // Update overlay UI to reflect which device was allowed or blocked
+    updateMediaUI();
+
+    // Discover devices and configure Built-in mic isolation if audio is available
+    if (isAudioEnabled && localStream.getAudioTracks().length > 0) {
+      try {
+        const inputs = await getAudioInputDevices();
+        const bestBuiltIn = pickBestBuiltInMic(inputs);
+
+        if (bestBuiltIn && bestBuiltIn.deviceId) {
+          activeMicDeviceId = bestBuiltIn.deviceId;
+          const currentLabel = localStream.getAudioTracks()[0]?.label || '';
+          const btKeywords = [/airpods/i, /bluetooth/i, /headset/i, /wh-1000/i, /bose/i, /galaxy buds/i];
+          if (btKeywords.some(p => p.test(currentLabel)) && bestBuiltIn.deviceId !== localStream.getAudioTracks()[0]?.getSettings()?.deviceId) {
+            await switchMicrophone(bestBuiltIn.deviceId);
+          }
+          populateMicSelect(inputs, activeMicDeviceId);
+        } else {
+          populateMicSelect(inputs, localStream.getAudioTracks()[0]?.getSettings()?.deviceId);
+        }
+        setupLocalMicMeter(localStream);
+      } catch (e) {
+        console.warn('[WebRTC] Device setup error:', e);
+      }
+    }
+
+    const localVideo = document.getElementById('nps-local-video');
+    if (localVideo) {
+      localVideo.srcObject = localStream;
     }
   }
 
@@ -716,7 +822,12 @@
   }
 
   function setupDataChannel(dc) {
-    dc.onopen = () => console.log('[DataChannel] Peer Data Channel OPEN');
+    dc.onopen = () => {
+      console.log('[DataChannel] Peer Data Channel OPEN');
+      const video = document.querySelector('video');
+      const now = video ? video.currentTime : lastKnownPlayerTime;
+      broadcastSyncState(isPlayerPaused ? 'pause' : 'play', now, { initialSync: true });
+    };
     dc.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
@@ -752,12 +863,18 @@
               const peer = msg.peers[0];
               updateFriendInfo(peer.userName);
               await createPeerConnection(true, peer.peerId);
+              broadcastSyncState('request_state', 0);
             }
           } else if (msg.type === 'peer-joined') {
             console.log('[Signaling] Peer joined room:', msg.peerId);
             updateFriendInfo(msg.userName);
             showSyncAlert(`${msg.userName} joined!`, '👋');
             await createPeerConnection(false, msg.peerId);
+            setTimeout(() => {
+              const video = document.querySelector('video');
+              const now = video ? video.currentTime : lastKnownPlayerTime;
+              broadcastSyncState(isPlayerPaused ? 'pause' : 'play', now, { initialSync: true });
+            }, 500);
           } else if (msg.type === 'signal') {
             handleSignalingData(msg.signal, msg.senderId);
           } else if (msg.type === 'sync') {
@@ -1000,6 +1117,39 @@
       ignoreLocalEventsUntil = Date.now() + 1500;
       simulateMediaControl('seek', time);
       showSyncAlert(`${sender} jumped to ${formatTime(time)}`, '⏩');
+    } else if (action === 'jump_forward') {
+      stopCatchUp();
+      ignoreLocalEventsUntil = Date.now() + 1500;
+      window.postMessage({ source: 'NETFLIX_PARTY_CONTENT', action: 'jump_forward' }, '*');
+      const video = document.querySelector('video');
+      if (video) video.currentTime += 10;
+      showSyncAlert(`${sender} skipped +10s`, '⏩');
+    } else if (action === 'jump_back') {
+      stopCatchUp();
+      ignoreLocalEventsUntil = Date.now() + 1500;
+      window.postMessage({ source: 'NETFLIX_PARTY_CONTENT', action: 'jump_back' }, '*');
+      const video = document.querySelector('video');
+      if (video) video.currentTime = Math.max(0, video.currentTime - 10);
+      showSyncAlert(`${sender} jumped -10s`, '⏪');
+    } else if (action === 'skip_intro') {
+      ignoreLocalEventsUntil = Date.now() + 1500;
+      window.postMessage({ source: 'NETFLIX_PARTY_CONTENT', action: 'skip_intro' }, '*');
+      showSyncAlert(`${sender} skipped intro`, '⏭️');
+    } else if (action === 'next_episode') {
+      ignoreLocalEventsUntil = Date.now() + 2500;
+      window.postMessage({ source: 'NETFLIX_PARTY_CONTENT', action: 'next_episode' }, '*');
+      showSyncAlert(`${sender} switched to next episode`, '⏭️');
+    } else if (action === 'request_state') {
+      const video = document.querySelector('video');
+      const now = video ? video.currentTime : lastKnownPlayerTime;
+      broadcastSyncState(isPlayerPaused ? 'pause' : 'play', now);
+    } else if (action === 'time_heartbeat') {
+      currentRemoteTime = time;
+      const video = document.querySelector('video');
+      if (!video) {
+        lastKnownPlayerTime = time;
+        updateTimecodeUI(time, 0);
+      }
     } else if (action === 'request_catch_up') {
       if (typeof time === 'number') {
         runCatchUpTo(time, isPlayerPaused ? 'pause' : 'play', sender);
@@ -1057,6 +1207,80 @@
     }
   }
 
+  function updateTimecodeUI(time, duration) {
+    const timecode = document.getElementById('nps-timecode-label');
+    const pillTime = document.getElementById('nps-pill-time');
+    const durFormatted = (duration && !isNaN(duration) && duration > 0) ? ` / ${formatTime(duration)}` : '';
+    if (timecode) {
+      timecode.textContent = `${formatTime(time)}${durFormatted}`;
+    }
+    if (pillTime) {
+      pillTime.textContent = formatTime(time);
+    }
+  }
+
+  // Direct DOM Video Hook (Works 100% on Netflix, YouTube, HTML5 simulator without relying on bridge)
+  function hookDOMVideo() {
+    const video = document.querySelector('video');
+    if (!video) return;
+
+    // Keep state current
+    lastKnownPlayerTime = video.currentTime;
+    isPlayerPaused = video.paused;
+    updateTimecodeUI(video.currentTime, video.duration);
+
+    if (video.__nps_direct_hooked) return;
+    video.__nps_direct_hooked = true;
+
+    video.addEventListener('timeupdate', () => {
+      lastKnownPlayerTime = video.currentTime;
+      isPlayerPaused = video.paused;
+      updateTimecodeUI(video.currentTime, video.duration);
+    });
+
+    video.addEventListener('play', () => {
+      lastKnownPlayerTime = video.currentTime;
+      isPlayerPaused = false;
+      updateTimecodeUI(video.currentTime, video.duration);
+      if (Date.now() >= ignoreLocalEventsUntil) {
+        broadcastSyncState('play', video.currentTime);
+        showSyncAlert('You played', '▶️');
+      }
+    });
+
+    video.addEventListener('pause', () => {
+      lastKnownPlayerTime = video.currentTime;
+      isPlayerPaused = true;
+      updateTimecodeUI(video.currentTime, video.duration);
+      if (Date.now() >= ignoreLocalEventsUntil) {
+        broadcastSyncState('pause', video.currentTime);
+        showSyncAlert('You paused', '⏸️');
+      }
+    });
+
+    video.addEventListener('seeked', () => {
+      lastKnownPlayerTime = video.currentTime;
+      updateTimecodeUI(video.currentTime, video.duration);
+      if (Date.now() >= ignoreLocalEventsUntil) {
+        broadcastSyncState('seek', video.currentTime);
+        showSyncAlert('You jumped', '⏩');
+      }
+    });
+  }
+
+  // Poll continuously for dynamically mounted videos
+  setInterval(hookDOMVideo, 250);
+
+  // Periodic heartbeat sync: broadcasts advancing video time to keep iPhone in perfect sync
+  setInterval(() => {
+    const video = document.querySelector('video');
+    const now = video ? video.currentTime : lastKnownPlayerTime;
+    const paused = video ? video.paused : isPlayerPaused;
+    if (!paused && now > 0) {
+      broadcastSyncState('time_heartbeat', now);
+    }
+  }, 1500);
+
   // Bridge Listener: State changes & User interactions reported by Netflix player
   window.addEventListener('message', (event) => {
     if (!event.data || event.data.source !== 'NETFLIX_PARTY_BRIDGE') return;
@@ -1075,15 +1299,7 @@
         }
       }
 
-      // Update UI readout only (never broadcasts to network)
-      const timecode = document.getElementById('nps-timecode-label');
-      const pillTime = document.getElementById('nps-pill-time');
-      if (timecode) {
-        timecode.textContent = `${formatTime(currentTime)} / ${formatTime(duration)}`;
-      }
-      if (pillTime) {
-        pillTime.textContent = formatTime(currentTime);
-      }
+      updateTimecodeUI(currentTime, duration);
       return;
     }
 

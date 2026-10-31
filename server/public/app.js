@@ -285,38 +285,77 @@
   }
 
   async function initMedia() {
+    localStream = new MediaStream();
+
+    // 1. Prompt for Microphone permission FIRST
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({
+      const audioStream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,    // Eliminates any acoustic leakage from loud headphones
+          echoCancellation: true,    // Eliminates acoustic leakage from loud headphones
           noiseSuppression: true,    // Cuts fan hum, AC hum, keyboard clicks
           autoGainControl: true,     // Balances voice level
           sampleRate: { ideal: 48000 },
           channelCount: { ideal: 2 }
-        },
+        }
+      });
+      const aTrack = audioStream.getAudioTracks()[0];
+      if (aTrack) {
+        localStream.addTrack(aTrack);
+        isMicActive = true;
+        btnMic.classList.remove('off');
+        btnMic.textContent = '🎙️';
+      }
+    } catch (audioErr) {
+      console.warn('[Media] Microphone permission blocked or unavailable:', audioErr);
+      isMicActive = false;
+      btnMic.classList.add('off');
+      btnMic.textContent = '🔇';
+    }
+
+    // 2. Prompt for Camera permission SECOND (one after another)
+    try {
+      const videoStream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
       });
-
-      const inputs = await getPhoneAudioInputs();
-      const best = pickBestPhoneMic(inputs);
-      if (best && best.deviceId) {
-        activePhoneMicId = best.deviceId;
-        const currentLabel = localStream.getAudioTracks()[0]?.label || '';
-        const btKeywords = [/airpods/i, /bluetooth/i, /headset/i, /buds/i];
-        if (btKeywords.some(p => p.test(currentLabel)) && best.deviceId !== localStream.getAudioTracks()[0]?.getSettings()?.deviceId) {
-          await switchPhoneMic(best.deviceId);
-        }
-        populatePhoneMicSelect(inputs, activePhoneMicId);
-      } else {
-        populatePhoneMicSelect(inputs, localStream.getAudioTracks()[0]?.getSettings()?.deviceId);
+      const vTrack = videoStream.getVideoTracks()[0];
+      if (vTrack) {
+        localStream.addTrack(vTrack);
+        isCamActive = true;
+        btnCam.classList.remove('off');
+        btnCam.textContent = '📹';
+        localVideo.classList.remove('hidden');
       }
-
-      localVideo.srcObject = localStream;
-      setupLocalMicMeter(localStream);
-    } catch (e) {
-      console.warn('[Media] AV not permitted or not supported. Sync-only fallback.', e);
-      localStream = new MediaStream();
+    } catch (videoErr) {
+      console.warn('[Media] Camera permission blocked or unavailable:', videoErr);
+      isCamActive = false;
+      btnCam.classList.add('off');
+      btnCam.textContent = '🚫';
+      localVideo.classList.add('hidden');
     }
+
+    // Configure Built-in mic isolation if audio is available
+    if (isMicActive && localStream.getAudioTracks().length > 0) {
+      try {
+        const inputs = await getPhoneAudioInputs();
+        const best = pickBestPhoneMic(inputs);
+        if (best && best.deviceId) {
+          activePhoneMicId = best.deviceId;
+          const currentLabel = localStream.getAudioTracks()[0]?.label || '';
+          const btKeywords = [/airpods/i, /bluetooth/i, /headset/i, /buds/i];
+          if (btKeywords.some(p => p.test(currentLabel)) && best.deviceId !== localStream.getAudioTracks()[0]?.getSettings()?.deviceId) {
+            await switchPhoneMic(best.deviceId);
+          }
+          populatePhoneMicSelect(inputs, activePhoneMicId);
+        } else {
+          populatePhoneMicSelect(inputs, localStream.getAudioTracks()[0]?.getSettings()?.deviceId);
+        }
+        setupLocalMicMeter(localStream);
+      } catch (e) {
+        console.warn('[Media] Mic setup error:', e);
+      }
+    }
+
+    localVideo.srcObject = localStream;
   }
 
   // Web Audio Mixer for Friend's Voice
@@ -495,7 +534,32 @@
     avatarCircle.textContent = (name || 'F').charAt(0).toUpperCase();
   }
 
-  // Playback Synchronization Logic
+  // Playback Synchronization Logic & Real-time Clock Ticker
+  let playbackTicker = null;
+
+  function startPlaybackTicker() {
+    if (playbackTicker) clearInterval(playbackTicker);
+    let lastTick = performance.now();
+    playbackTicker = setInterval(() => {
+      if (!isPlaying) {
+        stopPlaybackTicker();
+        return;
+      }
+      const now = performance.now();
+      const delta = (now - lastTick) / 1000;
+      lastTick = now;
+      currentTime += delta;
+      timecodeDisplay.textContent = formatTime(currentTime);
+    }, 200);
+  }
+
+  function stopPlaybackTicker() {
+    if (playbackTicker) {
+      clearInterval(playbackTicker);
+      playbackTicker = null;
+    }
+  }
+
   let catchUpInterval = null;
 
   function stopCatchUp() {
@@ -507,6 +571,7 @@
 
   function runCatchUpTo(targetTime, desiredAction = 'pause', sender = 'Friend') {
     stopCatchUp();
+    stopPlaybackTicker();
     const diff = targetTime - currentTime;
 
     if (Math.abs(diff) <= 0.4) {
@@ -524,7 +589,7 @@
       showBanner(`⏩ Catching up to ${sender} (${diff.toFixed(1)}s behind)...`, '⚡');
 
       catchUpInterval = setInterval(() => {
-        currentTime += 0.2;
+        currentTime += 0.25;
         timecodeDisplay.textContent = formatTime(currentTime);
         if (currentTime >= targetTime - 0.25 || currentTime > targetTime) {
           stopCatchUp();
@@ -558,6 +623,20 @@
       }
     }
 
+    if (action === 'time_heartbeat') {
+      if (typeof time === 'number') {
+        if (Math.abs(currentTime - time) > 1.2 || !isPlaying) {
+          currentTime = time;
+          timecodeDisplay.textContent = formatTime(currentTime);
+        }
+        if (msg.isPaused !== undefined && msg.isPaused !== !isPlaying) {
+          isPlaying = !msg.isPaused;
+          updatePlayPauseUI();
+        }
+      }
+      return;
+    }
+
     if (action === 'pause') {
       if (typeof time === 'number' && (time - currentTime) > 1.8) {
         runCatchUpTo(time, 'pause', sender);
@@ -585,6 +664,18 @@
       if (typeof time === 'number') currentTime = time;
       timecodeDisplay.textContent = formatTime(currentTime);
       showBanner(`${sender} jumped to ${formatTime(time)}`, '⏩');
+    } else if (action === 'jump_forward') {
+      currentTime += 10;
+      timecodeDisplay.textContent = formatTime(currentTime);
+      showBanner(`${sender} skipped +10s`, '⏩');
+    } else if (action === 'jump_back') {
+      currentTime = Math.max(0, currentTime - 10);
+      timecodeDisplay.textContent = formatTime(currentTime);
+      showBanner(`${sender} rewound -10s`, '⏪');
+    } else if (action === 'skip_intro') {
+      showBanner(`${sender} skipped intro`, '⏭️');
+    } else if (action === 'next_episode') {
+      showBanner(`${sender} next episode`, '⏭️');
     } else if (action === 'request_catch_up') {
       if (typeof time === 'number') {
         runCatchUpTo(time, isPlaying ? 'play' : 'pause', sender);
@@ -614,12 +705,14 @@
 
   function updatePlayPauseUI() {
     if (isPlaying) {
+      startPlaybackTicker();
       syncStatePill.textContent = 'PLAYING';
       syncStatePill.className = 'sync-state-pill playing';
       btnMasterPlayPause.className = 'big-sync-btn playing';
       playPauseIcon.textContent = '⏸️';
       playPauseLabel.textContent = 'Tap to Pause Sync';
     } else {
+      stopPlaybackTicker();
       syncStatePill.textContent = 'PAUSED';
       syncStatePill.className = 'sync-state-pill paused';
       btnMasterPlayPause.className = 'big-sync-btn';
@@ -645,20 +738,37 @@
     });
   }
 
-  // Fast Forward / Rewind
+  // Fast Forward / Rewind (NetflixController remote shortcuts)
   btnSeekBack.addEventListener('click', () => {
     currentTime = Math.max(0, currentTime - 10);
     timecodeDisplay.textContent = formatTime(currentTime);
-    broadcastAction('seek', currentTime);
-    showBanner(`Rewound to ${formatTime(currentTime)}`, '⏪');
+    broadcastAction('jump_back', currentTime);
+    showBanner('Rewound 10s', '⏪');
   });
 
   btnSeekFwd.addEventListener('click', () => {
     currentTime += 10;
     timecodeDisplay.textContent = formatTime(currentTime);
-    broadcastAction('seek', currentTime);
-    showBanner(`Fast-forwarded to ${formatTime(currentTime)}`, '⏩');
+    broadcastAction('jump_forward', currentTime);
+    showBanner('Forward 10s', '⏩');
   });
+
+  // Netflix Remote Buttons (Skip Intro & Next Episode)
+  const btnSkipIntro = document.getElementById('btn-skip-intro');
+  if (btnSkipIntro) {
+    btnSkipIntro.addEventListener('click', () => {
+      broadcastAction('skip_intro', currentTime);
+      showBanner('⏭️ Skipped Intro on Netflix');
+    });
+  }
+
+  const btnNextEp = document.getElementById('btn-next-ep');
+  if (btnNextEp) {
+    btnNextEp.addEventListener('click', () => {
+      broadcastAction('next_episode', currentTime);
+      showBanner('⏭️ Next Episode on Netflix');
+    });
+  }
 
   // Individual Volume Sliders
   friendVolSlider.addEventListener('input', (e) => {
@@ -701,26 +811,90 @@
     }
   });
 
-  // AV Toggles
-  btnMic.addEventListener('click', () => {
-    isMicActive = !isMicActive;
-    if (localStream) {
-      localStream.getAudioTracks().forEach(t => t.enabled = isMicActive);
+  // AV Toggles (Independent & On-Demand Request)
+  btnMic.addEventListener('click', async () => {
+    const audioTracks = localStream ? localStream.getAudioTracks() : [];
+    if (audioTracks.length === 0) {
+      try {
+        const audioStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            sampleRate: { ideal: 48000 },
+            channelCount: { ideal: 2 }
+          }
+        });
+        const newTrack = audioStream.getAudioTracks()[0];
+        if (newTrack) {
+          localStream.addTrack(newTrack);
+          if (pc) {
+            const sender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
+            if (sender) {
+              await sender.replaceTrack(newTrack);
+            } else {
+              pc.addTrack(newTrack, localStream);
+            }
+            applyHighBitrateSenders();
+          }
+          isMicActive = true;
+          setupLocalMicMeter(localStream);
+          btnMic.classList.remove('off');
+          btnMic.textContent = '🎙️';
+          showBanner('Microphone Active', '🎙️');
+          return;
+        }
+      } catch (e) {
+        showBanner('Microphone blocked by browser', '🚫');
+        return;
+      }
     }
+
+    isMicActive = !isMicActive;
+    localStream.getAudioTracks().forEach(t => t.enabled = isMicActive);
     btnMic.classList.toggle('off', !isMicActive);
     btnMic.textContent = isMicActive ? '🎙️' : '🔇';
-    showBanner(isMicActive ? 'Mic unmuted' : 'Mic muted');
+    showBanner(isMicActive ? 'Mic Active' : 'Mic Muted', isMicActive ? '🎙️' : '🔇');
   });
 
-  btnCam.addEventListener('click', () => {
-    isCamActive = !isCamActive;
-    if (localStream) {
-      localStream.getVideoTracks().forEach(t => t.enabled = isCamActive);
+  btnCam.addEventListener('click', async () => {
+    const videoTracks = localStream ? localStream.getVideoTracks() : [];
+    if (videoTracks.length === 0) {
+      try {
+        const videoStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
+        });
+        const newTrack = videoStream.getVideoTracks()[0];
+        if (newTrack) {
+          localStream.addTrack(newTrack);
+          localVideo.srcObject = localStream;
+          localVideo.classList.remove('hidden');
+          if (pc) {
+            const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+            if (sender) {
+              await sender.replaceTrack(newTrack);
+            } else {
+              pc.addTrack(newTrack, localStream);
+            }
+          }
+          isCamActive = true;
+          btnCam.classList.remove('off');
+          btnCam.textContent = '📹';
+          showBanner('Camera Active', '📹');
+          return;
+        }
+      } catch (e) {
+        showBanner('Camera blocked by browser', '🚫');
+        return;
+      }
     }
+
+    isCamActive = !isCamActive;
+    localStream.getVideoTracks().forEach(t => t.enabled = isCamActive);
     btnCam.classList.toggle('off', !isCamActive);
     btnCam.textContent = isCamActive ? '📹' : '🚫';
     localVideo.classList.toggle('hidden', !isCamActive);
-    showBanner(isCamActive ? 'Camera enabled' : 'Camera off');
+    showBanner(isCamActive ? 'Camera Active' : 'Camera Disabled', isCamActive ? '📹' : '🚫');
   });
 
   // Share Room Link

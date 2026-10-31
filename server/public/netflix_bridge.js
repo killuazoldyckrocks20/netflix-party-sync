@@ -1,6 +1,6 @@
 /**
  * Netflix Party Sync - Main World Bridge Script
- * Injected into window context to interface directly with Netflix's internal Cadmium Player API,
+ * NetflixController pattern: Interfaces directly with Netflix's internal Cadmium Player API,
  * native React controls, and standard HTML5 <video> elements.
  */
 (function () {
@@ -9,7 +9,7 @@
   if (window.__nps_bridge_loaded) return;
   window.__nps_bridge_loaded = true;
 
-  console.log('[NetflixSyncBridge] Initialized in page context.');
+  console.log('[NetflixSyncBridge] Active in page context.');
 
   function getNetflixPlayer() {
     try {
@@ -34,39 +34,20 @@
     return document.querySelector('video');
   }
 
-  function simulateMediaKeys(action) {
+  function simulateKey(key, code, keyCode) {
     const target = document.querySelector('.watch-video--player-view') || document.querySelector('video') || document.body;
-    
-    // 1. MediaPlayPause (KeyCode 179)
+    const evtInit = {
+      key: key,
+      code: code,
+      keyCode: keyCode,
+      which: keyCode,
+      bubbles: true,
+      cancelable: true,
+      composed: true
+    };
     try {
-      target.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'MediaPlayPause',
-        code: 'MediaPlayPause',
-        keyCode: 179,
-        which: 179,
-        bubbles: true,
-        cancelable: true
-      }));
-    } catch (e) {}
-
-    // 2. Spacebar (KeyCode 32)
-    try {
-      target.dispatchEvent(new KeyboardEvent('keydown', {
-        key: ' ',
-        code: 'Space',
-        keyCode: 32,
-        which: 32,
-        bubbles: true,
-        cancelable: true
-      }));
-      target.dispatchEvent(new KeyboardEvent('keyup', {
-        key: ' ',
-        code: 'Space',
-        keyCode: 32,
-        which: 32,
-        bubbles: true,
-        cancelable: true
-      }));
+      target.dispatchEvent(new KeyboardEvent('keydown', evtInit));
+      target.dispatchEvent(new KeyboardEvent('keyup', evtInit));
     } catch (e) {}
   }
 
@@ -90,7 +71,7 @@
     if (playBtn) {
       try { playBtn.click(); } catch (e) {}
     } else if (video && video.paused) {
-      simulateMediaKeys('play');
+      simulateKey(' ', 'Space', 32);
     }
   }
 
@@ -111,7 +92,7 @@
     if (pauseBtn) {
       try { pauseBtn.click(); } catch (e) {}
     } else if (video && !video.paused) {
-      simulateMediaKeys('pause');
+      simulateKey(' ', 'Space', 32);
     }
   }
 
@@ -129,6 +110,63 @@
           video.currentTime = seconds;
         }
       } catch (e) {}
+    }
+  }
+
+  function skipIntro() {
+    const selectors = [
+      '[data-uia="player-skip-intro"]',
+      '.watch-video--skip-content-button',
+      'button[aria-label="Skip Intro"]',
+      '.skip-credits a',
+      '.button-nfplayerSkipIntro'
+    ];
+    for (const sel of selectors) {
+      const btn = document.querySelector(sel);
+      if (btn) {
+        btn.click();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function nextEpisode() {
+    const selectors = [
+      '[data-uia="next-episode-seamless-button"]',
+      '[data-uia="control-next"]',
+      'button[aria-label="Next Episode"]',
+      '.button-nfplayerNextEpisode'
+    ];
+    for (const sel of selectors) {
+      const btn = document.querySelector(sel);
+      if (btn) {
+        btn.click();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function jump10s(forward) {
+    const player = getNetflixPlayer();
+    const video = getVideoElement();
+    const offset = forward ? 10 : -10;
+
+    if (player && typeof player.seek === 'function' && typeof player.getCurrentTime === 'function') {
+      try {
+        const currMs = player.getCurrentTime() || 0;
+        player.seek(Math.max(0, currMs + (offset * 1000)));
+        return;
+      } catch (e) {}
+    }
+
+    if (video) {
+      try {
+        video.currentTime = Math.max(0, video.currentTime + offset);
+      } catch (e) {}
+    } else {
+      simulateKey(forward ? 'ArrowRight' : 'ArrowLeft', forward ? 'ArrowRight' : 'ArrowLeft', forward ? 39 : 37);
     }
   }
 
@@ -212,7 +250,7 @@
     }, '*');
   }
 
-  // Receive commands from content.js (sent from friend)
+  // Receive commands from content.js (remotely triggered from friend or phone)
   window.addEventListener('message', (event) => {
     if (!event.data || event.data.source !== 'NETFLIX_PARTY_CONTENT') return;
     const { action, time, volume } = event.data;
@@ -241,6 +279,18 @@
       } else if (action === 'seek') {
         markRemoteExecution();
         seekVideo(time);
+      } else if (action === 'jump_forward') {
+        markRemoteExecution();
+        jump10s(true);
+      } else if (action === 'jump_back') {
+        markRemoteExecution();
+        jump10s(false);
+      } else if (action === 'skip_intro') {
+        markRemoteExecution();
+        skipIntro();
+      } else if (action === 'next_episode') {
+        markRemoteExecution();
+        nextEpisode();
       } else if (action === 'volume') {
         setVolume(volume);
       }
@@ -289,7 +339,7 @@
       }
     }
 
-    // Emit gentle time_update for UI timecode display (NEVER triggers network sync broadcast)
+    // Emit gentle time_update for UI timecode display
     window.postMessage({
       source: 'NETFLIX_PARTY_BRIDGE',
       type: 'time_update',
@@ -298,6 +348,6 @@
       isPaused: paused,
       metadata: getShowMetadata()
     }, '*');
-  }, 350);
+  }, 250);
 
 })();
