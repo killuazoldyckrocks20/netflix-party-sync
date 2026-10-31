@@ -96,20 +96,42 @@
   if (syncMediaPlayer) {
     syncMediaPlayer.addEventListener('play', () => {
       if (Date.now() < ignoreLocalMediaEvents) return;
-      isPlaying = true;
-      currentTime = syncMediaPlayer.currentTime;
-      updatePlayPauseUI();
-      broadcastAction('play', currentTime);
-      showBanner('Playing synced media', '▶️');
+      if (!countdownInterval) {
+        // Whenever user plays audio, pause again immediately and start countdown!
+        ignoreLocalMediaEvents = Date.now() + 4000;
+        syncMediaPlayer.pause();
+        isPlaying = false;
+        updatePlayPauseUI();
+        forceMobileAudioInterruption('countdown');
+        const targetTime = Date.now() + 3000;
+        broadcastAction('countdown_start', currentTime, { targetTime: targetTime });
+        showBanner('⏳ Starting 3-2-1 resume countdown...', '⏱️');
+
+        runSynchronizedCountdown(() => {
+          isPlaying = true;
+          updatePlayPauseUI();
+          ignoreLocalMediaEvents = Date.now() + 1500;
+          syncMediaPlayer.play().catch(() => {});
+          broadcastAction('play', currentTime);
+          showBanner('▶️ Playback resumed!', '▶️');
+        }, targetTime);
+      }
     });
 
     syncMediaPlayer.addEventListener('pause', () => {
       if (Date.now() < ignoreLocalMediaEvents) return;
+      if (countdownInterval) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+        const modal = document.getElementById('countdown-modal');
+        if (modal) modal.style.display = 'none';
+      }
       isPlaying = false;
       currentTime = syncMediaPlayer.currentTime;
       updatePlayPauseUI();
+      forceMobileAudioInterruption('pause');
       broadcastAction('pause', currentTime);
-      showBanner('Paused synced media', '⏸️');
+      showBanner('⏸️ You paused playback', '⏸️');
     });
 
     syncMediaPlayer.addEventListener('timeupdate', () => {
@@ -597,6 +619,168 @@
     avatarCircle.textContent = (name || 'F').charAt(0).toUpperCase();
   }
 
+  // ================= AUDIO FOCUS HIJACKER & SYNCHRONIZED COUNTDOWN =================
+
+  // Generates clean 8-bit PCM silent WAV data URI to hijack mobile OS audio focus
+  function generateSilenceWavDataUri(seconds = 2) {
+    const sampleRate = 8000;
+    const numSamples = sampleRate * seconds;
+    const buffer = new ArrayBuffer(44 + numSamples);
+    const view = new DataView(buffer);
+
+    const writeString = (offset, str) => {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + numSamples, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // Mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate, true);
+    view.setUint16(32, 1, true);
+    view.setUint16(34, 8, true);
+    writeString(36, 'data');
+    view.setUint32(40, numSamples, true);
+
+    const u8 = new Uint8Array(buffer, 44);
+    u8.fill(128);
+
+    const blob = new Blob([buffer], { type: 'audio/wav' });
+    return URL.createObjectURL(blob);
+  }
+
+  let silenceWavUri = null;
+
+  function forceMobileAudioInterruption(reason = 'pause') {
+    try {
+      const stealer = document.getElementById('audio-focus-stealer');
+      if (!stealer) return;
+
+      if (!silenceWavUri) {
+        silenceWavUri = generateSilenceWavDataUri(2);
+      }
+      if (!stealer.src) {
+        stealer.src = silenceWavUri;
+      }
+
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'playing';
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: reason === 'pause' ? '⏸️ Pausing Netflix...' : '⏳ Sync Countdown...',
+          artist: 'Netflix Party Sync'
+        });
+      }
+
+      stealer.currentTime = 0;
+      const playPromise = stealer.play();
+      if (playPromise && playPromise.catch) {
+        playPromise.catch(() => {});
+      }
+
+      if ('vibrate' in navigator) {
+        try { navigator.vibrate([120, 60, 120]); } catch (e) {}
+      }
+
+      setTimeout(() => {
+        try {
+          stealer.pause();
+          if ('mediaSession' in navigator) {
+            navigator.mediaSession.playbackState = 'paused';
+          }
+        } catch (e) {}
+      }, 1400);
+    } catch (err) {
+      console.warn('[AudioFocus] Interruption error:', err);
+    }
+  }
+
+  // Web Audio Tone Beep for Countdown
+  function playSyncBeep(freq = 440, durationMs = 120) {
+    try {
+      const ctx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (ctx.state === 'suspended') ctx.resume();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + (durationMs / 1000));
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + (durationMs / 1000));
+    } catch (e) {}
+  }
+
+  let countdownInterval = null;
+
+  function runSynchronizedCountdown(onFinish, targetEndTime) {
+    if (countdownInterval) clearInterval(countdownInterval);
+
+    // Immediately interrupt audio focus so any running playback is halted before countdown
+    forceMobileAudioInterruption('countdown');
+
+    const modal = document.getElementById('countdown-modal');
+    const valEl = document.getElementById('countdown-val');
+    const subtext = document.getElementById('countdown-subtext');
+
+    if (modal) modal.style.display = 'flex';
+
+    const endTime = targetEndTime || (Date.now() + 3000);
+    let lastSec = 4;
+
+    const tick = () => {
+      const remainingMs = endTime - Date.now();
+      const sec = Math.ceil(remainingMs / 1000);
+
+      if (sec !== lastSec && sec > 0) {
+        lastSec = sec;
+        if (valEl) {
+          valEl.textContent = sec;
+          valEl.style.transform = 'scale(1.25)';
+          setTimeout(() => { if (valEl) valEl.style.transform = 'scale(1)'; }, 150);
+        }
+        if (subtext) subtext.innerHTML = `Get ready to tap Play together on <b>GO!</b>`;
+        playSyncBeep(440, 100);
+        if ('vibrate' in navigator) {
+          try { navigator.vibrate(80); } catch (e) {}
+        }
+      }
+
+      if (remainingMs <= 0) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+
+        if (valEl) {
+          valEl.textContent = '▶️ GO!';
+          valEl.style.color = '#46D369';
+          valEl.style.transform = 'scale(1.35)';
+        }
+        if (subtext) subtext.innerHTML = `<b>PLAY NOW!</b> Stream in sync!`;
+        playSyncBeep(880, 250);
+        if ('vibrate' in navigator) {
+          try { navigator.vibrate([200, 50, 200]); } catch (e) {}
+        }
+
+        setTimeout(() => {
+          if (modal) modal.style.display = 'none';
+          if (valEl) {
+            valEl.textContent = '3';
+            valEl.style.color = '#E50914';
+            valEl.style.transform = 'scale(1)';
+          }
+          if (onFinish) onFinish();
+        }, 500);
+      }
+    };
+
+    tick();
+    countdownInterval = setInterval(tick, 50);
+  }
+
   // Playback Synchronization Logic & Real-time Clock Ticker
   let playbackTicker = null;
 
@@ -710,21 +894,40 @@
     }
 
     if (action === 'pause') {
-      if (typeof time === 'number' && (time - currentTime) > 1.8) {
-        runCatchUpTo(time, 'pause', sender);
-      } else {
-        stopCatchUp();
-        if (typeof time === 'number') currentTime = time;
-        timecodeDisplay.textContent = formatTime(currentTime);
-        isPlaying = false;
+      forceMobileAudioInterruption('pause'); // Steals audio focus to force mobile Netflix to pause
+      stopCatchUp();
+      if (countdownInterval) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+        const modal = document.getElementById('countdown-modal');
+        if (modal) modal.style.display = 'none';
+      }
+      if (typeof time === 'number') currentTime = time;
+      timecodeDisplay.textContent = formatTime(currentTime);
+      isPlaying = false;
+      updatePlayPauseUI();
+      if (syncMediaPlayer && !syncMediaPlayer.paused) {
+        ignoreLocalMediaEvents = Date.now() + 1500;
+        if (typeof time === 'number') syncMediaPlayer.currentTime = time;
+        syncMediaPlayer.pause();
+      }
+      showBanner(`⏸️ ${sender} paused (Netflix audio focus paused)`, '⏸️');
+    } else if (action === 'countdown_start') {
+      // Remote user triggered Play! Force audio pause & run synchronized countdown
+      forceMobileAudioInterruption('countdown');
+      const targetTime = msg.targetTime || (Date.now() + 3000);
+      if (typeof time === 'number') currentTime = time;
+      showBanner(`⏱️ ${sender} started 3-2-1 resume countdown!`, '⏳');
+      runSynchronizedCountdown(() => {
+        isPlaying = true;
         updatePlayPauseUI();
-        if (syncMediaPlayer && !syncMediaPlayer.paused) {
+        if (syncMediaPlayer && syncMediaPlayer.paused) {
           ignoreLocalMediaEvents = Date.now() + 1500;
           if (typeof time === 'number') syncMediaPlayer.currentTime = time;
-          syncMediaPlayer.pause();
+          syncMediaPlayer.play().catch(() => {});
         }
-        showBanner(`${sender} paused at ${formatTime(time)}`, '⏸️');
-      }
+        showBanner(`▶️ Resumed in sync with ${sender}!`, '▶️');
+      }, targetTime);
     } else if (action === 'play') {
       if (typeof time === 'number' && (time - currentTime) > 1.8) {
         runCatchUpTo(time, 'play', sender);
@@ -819,22 +1022,34 @@
 
   // Master Play / Pause Button Click
   btnMasterPlayPause.addEventListener('click', () => {
-    isPlaying = !isPlaying;
-    updatePlayPauseUI();
-    const action = isPlaying ? 'play' : 'pause';
+    if (!isPlaying) {
+      // User tapped Play! Start synchronized countdown so both users resume together
+      const targetTime = Date.now() + 3000;
+      broadcastAction('countdown_start', currentTime, { targetTime: targetTime });
+      showBanner('⏳ Starting 3-2-1 resume countdown...', '⏱️');
 
-    if (syncMediaPlayer) {
-      ignoreLocalMediaEvents = Date.now() + 1500;
-      if (isPlaying) {
-        syncMediaPlayer.play().catch(() => {});
-      } else {
+      runSynchronizedCountdown(() => {
+        isPlaying = true;
+        updatePlayPauseUI();
+        if (syncMediaPlayer) {
+          ignoreLocalMediaEvents = Date.now() + 1500;
+          syncMediaPlayer.play().catch(() => {});
+        }
+        broadcastAction('play', currentTime);
+        showBanner('▶️ Playback resumed!', '▶️');
+      }, targetTime);
+    } else {
+      // User tapped Pause!
+      isPlaying = false;
+      updatePlayPauseUI();
+      forceMobileAudioInterruption('pause'); // Steal audio focus to force pause on mobile Netflix
+      if (syncMediaPlayer) {
+        ignoreLocalMediaEvents = Date.now() + 1500;
         syncMediaPlayer.pause();
       }
-      currentTime = syncMediaPlayer.currentTime;
+      broadcastAction('pause', currentTime);
+      showBanner('⏸️ You paused playback', '⏸️');
     }
-
-    broadcastAction(action, currentTime);
-    showBanner(`You ${action}ed playback`, isPlaying ? '▶️' : '⏸️');
   });
 
   const btnMobileCatchup = document.getElementById('btn-mobile-catchup');

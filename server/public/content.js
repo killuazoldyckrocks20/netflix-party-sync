@@ -116,6 +116,12 @@
             <span id="nps-alert-msg">Friend paused</span>
           </div>
 
+          <!-- Synchronized Countdown Overlay -->
+          <div class="nps-countdown-overlay" id="nps-countdown-overlay" style="display: none;">
+            <div class="nps-countdown-val" id="nps-countdown-val">3</div>
+            <div class="nps-countdown-subtext" id="nps-countdown-subtext">Resuming in sync...</div>
+          </div>
+
           <!-- Remote Friend Video -->
           <video class="nps-remote-video hidden" id="nps-remote-video" autoplay playsinline></video>
           
@@ -398,13 +404,33 @@
     // Play / Pause Toggle Button
     if (playPauseBtn) {
       playPauseBtn.addEventListener('click', () => {
-        const nextAction = isPlayerPaused ? 'play' : 'pause';
         const video = getMediaVideo();
         const now = video ? video.currentTime : lastKnownPlayerTime;
-        ignoreLocalEventsUntil = Date.now() + 1500;
-        simulateMediaControl(nextAction, now);
-        broadcastSyncState(nextAction, now, { isPaused: nextAction === 'pause' });
-        showSyncAlert(`You ${nextAction}ed playback`, nextAction === 'play' ? '▶️' : '⏸️');
+
+        if (isPlayerPaused) {
+          // Play clicked: Pause immediately & start 3-2-1 synchronized countdown
+          ignoreLocalEventsUntil = Date.now() + 4000;
+          simulateMediaControl('pause', now);
+          const targetTime = Date.now() + 3000;
+          broadcastSyncState('countdown_start', now, { targetTime: targetTime });
+          showSyncAlert('⏳ Starting 3-2-1 resume countdown...', '⏱️');
+
+          runExtensionCountdown(() => {
+            ignoreLocalEventsUntil = Date.now() + 2000;
+            simulateMediaControl('play', now);
+            isPlayerPaused = false;
+            broadcastSyncState('play', now, { isPaused: false });
+            showSyncAlert('▶️ Playback resumed!', '▶️');
+          }, targetTime);
+        } else {
+          // Pause clicked:
+          stopExtensionCountdown();
+          ignoreLocalEventsUntil = Date.now() + 1500;
+          simulateMediaControl('pause', now);
+          isPlayerPaused = true;
+          broadcastSyncState('pause', now, { isPaused: true });
+          showSyncAlert('⏸️ You paused playback', '⏸️');
+        }
       });
     }
 
@@ -456,6 +482,91 @@
       localVideo.classList.toggle('hidden', !isVideoEnabled);
       offLabel.classList.toggle('hidden', isVideoEnabled);
     }
+  }
+
+  // Synchronized countdown manager for Laptop Extension
+  let extensionCountdownInterval = null;
+
+  function playExtensionSyncBeep(freq = 440, durationMs = 120) {
+    try {
+      const ctx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (ctx.state === 'suspended') ctx.resume();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + (durationMs / 1000));
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + (durationMs / 1000));
+    } catch (e) {}
+  }
+
+  function stopExtensionCountdown() {
+    if (extensionCountdownInterval) {
+      clearInterval(extensionCountdownInterval);
+      extensionCountdownInterval = null;
+    }
+    const overlay = document.getElementById('nps-countdown-overlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+
+  function runExtensionCountdown(onFinish, targetEndTime) {
+    stopExtensionCountdown();
+
+    const overlay = document.getElementById('nps-countdown-overlay');
+    const valEl = document.getElementById('nps-countdown-val');
+    const subtext = document.getElementById('nps-countdown-subtext');
+
+    if (overlay) overlay.style.display = 'flex';
+
+    const endTime = targetEndTime || (Date.now() + 3000);
+    let lastSec = 4;
+
+    const tick = () => {
+      const remainingMs = endTime - Date.now();
+      const sec = Math.ceil(remainingMs / 1000);
+
+      if (sec !== lastSec && sec > 0) {
+        lastSec = sec;
+        if (valEl) {
+          valEl.textContent = sec;
+          valEl.style.color = '#E50914';
+          valEl.style.transform = 'scale(1.25)';
+          setTimeout(() => { if (valEl) valEl.style.transform = 'scale(1)'; }, 150);
+        }
+        if (subtext) subtext.textContent = 'Resuming in sync...';
+        playExtensionSyncBeep(440, 100);
+      }
+
+      if (remainingMs <= 0) {
+        clearInterval(extensionCountdownInterval);
+        extensionCountdownInterval = null;
+
+        if (valEl) {
+          valEl.textContent = '▶️ GO!';
+          valEl.style.color = '#46D369';
+          valEl.style.transform = 'scale(1.35)';
+        }
+        if (subtext) subtext.textContent = 'PLAYING NOW!';
+        playExtensionSyncBeep(880, 250);
+
+        setTimeout(() => {
+          if (overlay) overlay.style.display = 'none';
+          if (valEl) {
+            valEl.textContent = '3';
+            valEl.style.color = '#E50914';
+            valEl.style.transform = 'scale(1)';
+          }
+          if (onFinish) onFinish();
+        }, 400);
+      }
+    };
+
+    tick();
+    extensionCountdownInterval = setInterval(tick, 50);
   }
 
   function showSyncAlert(msg, icon = '🎬') {
@@ -1110,7 +1221,9 @@
     const localTime = video ? video.currentTime : lastKnownPlayerTime;
 
     if (action === 'pause') {
+      stopExtensionCountdown();
       currentRemoteTime = time;
+      isPlayerPaused = true;
       // If remote paused ahead of us by > 1.8s, catch up to their pause point!
       if (typeof time === 'number' && (time - localTime) > 1.8) {
         runCatchUpTo(time, 'pause', sender);
@@ -1120,6 +1233,22 @@
         simulateMediaControl('pause', time);
         showSyncAlert(`${sender} paused at ${formatTime(time)}`, '⏸️');
       }
+    } else if (action === 'countdown_start') {
+      // Remote user triggered Play! Pause immediately & run synchronized countdown
+      stopCatchUp();
+      const targetTime = msg.targetTime || (Date.now() + 3000);
+      if (typeof time === 'number') currentRemoteTime = time;
+      ignoreLocalEventsUntil = Date.now() + 4000;
+      simulateMediaControl('pause', typeof time === 'number' ? time : localTime);
+      isPlayerPaused = true;
+      showSyncAlert(`⏱️ ${sender} started 3-2-1 resume countdown!`, '⏳');
+
+      runExtensionCountdown(() => {
+        ignoreLocalEventsUntil = Date.now() + 2000;
+        simulateMediaControl('play', typeof time === 'number' ? time : localTime);
+        isPlayerPaused = false;
+        showSyncAlert(`▶️ Resumed in sync with ${sender}!`, '▶️');
+      }, targetTime);
     } else if (action === 'play') {
       currentRemoteTime = time;
       // If remote played ahead of us by > 1.8s, catch up and continue playing
@@ -1260,11 +1389,25 @@
 
     video.addEventListener('play', () => {
       lastKnownPlayerTime = video.currentTime;
-      isPlayerPaused = false;
       updateTimecodeUI(video.currentTime, video.duration);
       if (Date.now() >= ignoreLocalEventsUntil) {
-        broadcastSyncState('play', video.currentTime, { isPaused: false });
-        showSyncAlert('You played', '▶️');
+        if (!extensionCountdownInterval) {
+          // Pause again immediately and run synchronized countdown!
+          ignoreLocalEventsUntil = Date.now() + 4000;
+          simulateMediaControl('pause', video.currentTime);
+          isPlayerPaused = true;
+          const targetTime = Date.now() + 3000;
+          broadcastSyncState('countdown_start', video.currentTime, { targetTime: targetTime });
+          showSyncAlert('⏳ Starting 3-2-1 resume countdown...', '⏱️');
+
+          runExtensionCountdown(() => {
+            ignoreLocalEventsUntil = Date.now() + 2000;
+            simulateMediaControl('play', video.currentTime);
+            isPlayerPaused = false;
+            broadcastSyncState('play', video.currentTime, { isPaused: false });
+            showSyncAlert('▶️ Playback resumed!', '▶️');
+          }, targetTime);
+        }
       }
     });
 
@@ -1273,6 +1416,7 @@
       isPlayerPaused = true;
       updateTimecodeUI(video.currentTime, video.duration);
       if (Date.now() >= ignoreLocalEventsUntil) {
+        stopExtensionCountdown();
         broadcastSyncState('pause', video.currentTime, { isPaused: true });
         showSyncAlert('You paused', '⏸️');
       }
@@ -1332,17 +1476,38 @@
 
       const { action, time, metadata } = event.data;
       lastKnownPlayerTime = time;
-      isPlayerPaused = (action === 'pause');
 
       if (metadata && metadata.videoId) {
         currentLocalVideoId = metadata.videoId;
         currentLocalTitle = metadata.title || '';
       }
 
-      // Broadcast automatically to friend
-      broadcastSyncState(action, time);
-      showSyncAlert(action === 'pause' ? 'You paused' : (action === 'seek' ? 'You jumped' : 'You played'), 
-                    action === 'pause' ? '⏸️' : (action === 'seek' ? '⏩' : '▶️'));
+      if (action === 'play') {
+        if (!extensionCountdownInterval) {
+          ignoreLocalEventsUntil = Date.now() + 4000;
+          simulateMediaControl('pause', time);
+          isPlayerPaused = true;
+          const targetTime = Date.now() + 3000;
+          broadcastSyncState('countdown_start', time, { targetTime: targetTime });
+          showSyncAlert('⏳ Starting 3-2-1 resume countdown...', '⏱️');
+
+          runExtensionCountdown(() => {
+            ignoreLocalEventsUntil = Date.now() + 2000;
+            simulateMediaControl('play', time);
+            isPlayerPaused = false;
+            broadcastSyncState('play', time, { isPaused: false });
+            showSyncAlert('▶️ Playback resumed!', '▶️');
+          }, targetTime);
+        }
+      } else if (action === 'pause') {
+        stopExtensionCountdown();
+        isPlayerPaused = true;
+        broadcastSyncState('pause', time, { isPaused: true });
+        showSyncAlert('You paused', '⏸️');
+      } else {
+        broadcastSyncState(action, time);
+        showSyncAlert(action === 'seek' ? 'You jumped' : 'Sync updated', '⏩');
+      }
     }
   });
 

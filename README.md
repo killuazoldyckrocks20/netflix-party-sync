@@ -130,7 +130,8 @@ On iOS and Android, the official Netflix app is a sandboxed binary with Apple Fa
 1. Open the official Netflix mobile app to your show.
 2. Open [https://killuazoldyckrocks20.github.io/netflix-party-sync/](https://killuazoldyckrocks20.github.io/netflix-party-sync/) in Safari/Chrome.
 3. Tap **🪟 PiP** to float your friend's video call over the screen.
-4. When either user pauses on the companion, both phones trigger an alert banner and haptic vibration. When resuming, a synchronized audio cue keeps you aligned.
+4. **Automatic OS Audio Focus Hijacking on Pause:** When either user pauses (on laptop or web), the mobile web companion plays a silent audio burst and takes OS system audio focus (`AVAudioSession` / `AudioManager`). This forces the native mobile Netflix app to immediately pause!
+5. **Synchronized 3-2-1 Countdown on Resume ("3... 2... 1... GO!"):** Whenever either user taps Play or resumes playback, audio is paused immediately while a synchronized 3-2-1 countdown triggers across both devices with audible beeps (Web Audio API), haptic pulses, and a visual overlay. At the high-pitch "GO!" beat, both users resume together at the exact same millisecond.
 
 ---
 
