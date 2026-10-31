@@ -10,6 +10,7 @@
   const joinCard = document.getElementById('join-card');
   const partyView = document.getElementById('party-view');
   const inputRoom = document.getElementById('input-room');
+  const inputPass = document.getElementById('input-pass');
   const inputName = document.getElementById('input-name');
   const btnJoin = document.getElementById('btn-join');
   const roomTag = document.getElementById('room-tag');
@@ -56,6 +57,7 @@
   let friendGain = null;
 
   let roomId = 'PARTY77';
+  let roomPassword = '';
   let peerId = 'peer-' + Math.random().toString(36).substring(2, 9);
   let userName = 'Friend';
   let isPlaying = false;
@@ -70,12 +72,20 @@
     ]
   };
 
-  // Pre-fill room code from URL params
+  // Pre-fill room code and password from URL params
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.get('room')) {
     inputRoom.value = urlParams.get('room').toUpperCase();
   } else {
     inputRoom.value = 'PARTY77';
+  }
+
+  if (urlParams.get('pass') && inputPass) {
+    inputPass.value = urlParams.get('pass');
+    roomPassword = urlParams.get('pass');
+  } else if (inputPass) {
+    inputPass.value = localStorage.getItem('nps_pass') || '';
+    roomPassword = inputPass.value;
   }
   inputName.value = 'Mobile ' + Math.floor(Math.random() * 90 + 10);
 
@@ -146,7 +156,12 @@
   // Join Button
   btnJoin.addEventListener('click', async () => {
     roomId = inputRoom.value.trim().toUpperCase() || 'PARTY77';
+    roomPassword = inputPass ? inputPass.value.trim() : '';
     userName = inputName.value.trim() || 'Mobile User';
+
+    if (inputPass) {
+      localStorage.setItem('nps_pass', roomPassword);
+    }
 
     joinCard.classList.add('hidden');
     partyView.classList.remove('hidden');
@@ -506,6 +521,7 @@
 
     sigClient = new UniversalSignalingClient({
       roomId: roomId,
+      roomPassword: roomPassword,
       peerId: peerId,
       userName: userName,
       serverUrl: serverMode,
@@ -514,7 +530,10 @@
       },
       onMessage: async (msg) => {
         try {
-          if (msg.type === 'joined') {
+          if (msg.type === 'auth-error') {
+            showBanner('🔒 ' + (msg.error || 'Incorrect room password'), '❌');
+            return;
+          } else if (msg.type === 'joined') {
             if (msg.peers && msg.peers.length > 0) {
               const peer = msg.peers[0];
               updateFriendInfo(peer.userName);
@@ -993,9 +1012,10 @@
     showBanner(isCamActive ? 'Camera Active' : 'Camera Disabled', isCamActive ? '📹' : '🚫');
   });
 
-  // Share Room Link
+  // Share Room Link & Password
   btnShare.addEventListener('click', async () => {
-    const shareUrl = `${window.location.origin}/?room=${roomId}`;
+    const passParam = roomPassword ? `&pass=${encodeURIComponent(roomPassword)}` : '';
+    const shareUrl = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(roomId)}${passParam}`;
     if (navigator.share) {
       try {
         await navigator.share({
@@ -1006,10 +1026,28 @@
       } catch (e) {}
     } else {
       navigator.clipboard.writeText(shareUrl).then(() => {
-        showBanner('🔗 Room link copied!');
+        showBanner('🔗 Room link & password copied!');
       });
     }
   });
+
+  // Global Keyboard Shortcut: Alt+S (Option+S) or Alt+R to Resync Playback
+  window.addEventListener('keydown', (e) => {
+    const isAltS = (e.altKey && (e.code === 'KeyS' || e.key.toLowerCase() === 's'));
+    const isAltR = (e.altKey && (e.code === 'KeyR' || e.key.toLowerCase() === 'r'));
+    const isCtrlShiftS = (e.ctrlKey && e.shiftKey && (e.code === 'KeyS' || e.key.toLowerCase() === 's'));
+
+    if (isAltS || isAltR || isCtrlShiftS) {
+      const tag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+      if (tag === 'input' || tag === 'textarea') return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      broadcastAction('request_catch_up', currentTime);
+      showBanner('🎯 [Alt+S] Triggered Instant Resync!', '⚡');
+    }
+  }, true);
 
   // Leave Room
   btnLeave.addEventListener('click', () => {

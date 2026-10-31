@@ -1,5 +1,6 @@
 document.addEventListener('DOMContentLoaded', () => {
   const roomInput = document.getElementById('room-id');
+  const passInput = document.getElementById('room-pass');
   const nameInput = document.getElementById('user-name');
   const serverInput = document.getElementById('server-url');
   const checkMic = document.getElementById('check-mic');
@@ -9,8 +10,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const statusMsg = document.getElementById('status-msg');
 
   // Load saved options
-  chrome.storage.local.get(['roomId', 'userName', 'serverUrl', 'audioEnabled', 'videoEnabled'], (res) => {
+  chrome.storage.local.get(['roomId', 'roomPassword', 'userName', 'serverUrl', 'audioEnabled', 'videoEnabled'], (res) => {
     roomInput.value = res.roomId || 'PARTY77';
+    if (passInput) passInput.value = res.roomPassword || '';
     nameInput.value = res.userName || 'Friend';
     serverInput.value = res.serverUrl || 'cloud';
     if (typeof res.audioEnabled === 'boolean') checkMic.checked = res.audioEnabled;
@@ -30,13 +32,14 @@ document.addEventListener('DOMContentLoaded', () => {
   // Save Settings
   btnSave.addEventListener('click', () => {
     const roomId = roomInput.value.trim().toUpperCase() || 'PARTY77';
+    const roomPassword = passInput ? passInput.value.trim() : '';
     const userName = nameInput.value.trim() || 'Friend';
     const serverUrl = serverInput.value.trim() || 'cloud';
     const audioEnabled = checkMic ? checkMic.checked : true;
     const videoEnabled = checkCam ? checkCam.checked : true;
 
-    chrome.storage.local.set({ roomId, userName, serverUrl, audioEnabled, videoEnabled }, () => {
-      statusMsg.textContent = `✓ Saved! Room: ${roomId} (Mic: ${audioEnabled ? 'On' : 'Off'}, Cam: ${videoEnabled ? 'On' : 'Off'})`;
+    chrome.storage.local.set({ roomId, roomPassword, userName, serverUrl, audioEnabled, videoEnabled }, () => {
+      statusMsg.textContent = `✓ Saved! Room: ${roomId}${roomPassword ? ' (Protected)' : ''} (Mic: ${audioEnabled ? 'On' : 'Off'}, Cam: ${videoEnabled ? 'On' : 'Off'})`;
       setTimeout(() => {
         statusMsg.textContent = '';
       }, 3500);

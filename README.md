@@ -12,7 +12,8 @@
 
 ## 🌟 Quick Links
 * **Live Web App (Instant in-browser co-watch & remote):** [killuazoldyckrocks20.github.io/netflix-party-sync/](https://killuazoldyckrocks20.github.io/netflix-party-sync/)
-* **Default Test Room:** `PARTY77` (or append `?room=YOUR_CODE` to the URL)
+* **Default Test Room:** `PARTY77` (or append `?room=YOUR_CODE&pass=SECRET` to the URL)
+* **Instant Resync Keyboard Shortcut:** `Alt + S` (or `Option + S` on Mac / `Alt + R` / `Ctrl + Shift + S`)
 * **GitHub Repository:** [github.com/killuazoldyckrocks20/netflix-party-sync](https://github.com/killuazoldyckrocks20/netflix-party-sync)
 
 ---
@@ -76,6 +77,11 @@ player.getDuration();      // Returns media length
 ### Remote Control & Echo Prevention
 * When User A clicks Play or Pause, a command is dispatched across the WebRTC DataChannel (P2P zero-latency) with Serverless Cloud MQTT fallback.
 * The receiving side sets a temporary suppression lock (`ignoreLocalEventsUntil = Date.now() + 1500`) to execute the remote command without bouncing synthetic echo events back.
+
+### ⌨️ Instant Resync Shortcut (`Alt + S` / `Option + S`)
+If playback ever falls slightly out of alignment due to network lag or buffering:
+* Press **`Alt + S`** (or **`Option + S`** on Mac, or **`Alt + R`**, or **`Ctrl + Shift + S`**).
+* An instant on-screen alert appears (`🎯 [Alt+S] Triggered Instant Resync!`), and your player automatically performs Catch-Up Sync to align to your friend's exact millisecond.
 
 ---
 
@@ -151,7 +157,8 @@ On iOS and Android, the official Netflix app is a sandboxed binary with Apple Fa
 
 * **End-to-End Encryption (E2EE):** Video and voice streams use WebRTC with mandatory **DTLS-SRTP** hardware-level encryption. Streams travel directly peer-to-peer and are never routed through or stored on any server.
 * **Zero Logging:** The Serverless Cloud MQTT Signaling brokers (`broker.hivemq.com`, `broker.emqx.io`) only relay transient ephemeral JSON handshakes (`offer`, `answer`, `ice-candidate`, `sync`). No accounts, passwords, Netflix credentials, or viewing histories are ever collected or stored.
-* **Independent AV Controls:** Microphone and camera are requested sequentially, allowing you to grant mic while blocking video, or toggle either off at any time.
+* **Password-Protected Private Rooms:** In addition to the Room Code, you can set a secret **Room Password**. The password hashes into the signaling topic, creating an isolated, private channel that completely blocks unauthorized eavesdroppers or intruders.
+* **Sequential & Independent AV Permissions:** Microphone and camera are prompted sequentially one after another. You can allow one (e.g. microphone) while blocking the other (e.g. camera), or toggle either on/off independently at any time.
 
 ---
 

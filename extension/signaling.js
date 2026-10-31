@@ -10,6 +10,7 @@
 class UniversalSignalingClient {
   constructor(options = {}) {
     this.roomId = (options.roomId || 'PARTY77').trim().toUpperCase();
+    this.roomPassword = (options.roomPassword || '').trim();
     this.peerId = options.peerId || 'peer-' + Math.random().toString(36).substring(2, 9);
     this.userName = options.userName || 'Guest';
     this.serverUrl = options.serverUrl || 'cloud';
@@ -32,6 +33,21 @@ class UniversalSignalingClient {
       'wss://test.mosquitto.org:8081'
     ];
     this.cloudBrokerIdx = 0;
+  }
+
+  hashPassword(pass) {
+    if (!pass) return '';
+    let h = 0x811c9dc5;
+    for (let i = 0; i < pass.length; i++) {
+      h ^= pass.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0).toString(16);
+  }
+
+  getRoomTopic() {
+    const passHash = this.hashPassword(this.roomPassword);
+    return passHash ? `nps-party-v1/${this.roomId}-${passHash}` : `nps-party-v1/${this.roomId}`;
   }
 
   isCloudMode() {
@@ -109,7 +125,7 @@ class UniversalSignalingClient {
           // CONNACK packet: successfully connected to cloud broker!
           this.onLog('[Signaling] Cloud MQTT Connected! Subscribing to room topic...');
           this.onStatusChange('connected');
-          const topic = `nps-party-v1/${this.roomId}`;
+          const topic = this.getRoomTopic();
           this.ws.send(this.buildMqttSubscribe(topic, 1));
 
           // Start heartbeat ping every 25 seconds
@@ -211,6 +227,15 @@ class UniversalSignalingClient {
 
   /* ================= PROTOCOL LOGIC & PEER HANDSHAKE ================= */
   handleIncomingMessage(msg) {
+    // Password validation if room requires one
+    if (this.roomPassword) {
+      const expectedHash = this.hashPassword(this.roomPassword);
+      if (msg.passHash && msg.passHash !== expectedHash) {
+        this.onMessage({ type: 'auth-error', error: 'Incorrect room password' });
+        return;
+      }
+    }
+
     if (msg.type === 'join') {
       // Another peer just joined the room!
       const newPeerId = msg.peerId;
@@ -259,6 +284,9 @@ class UniversalSignalingClient {
   send(data) {
     data.senderId = this.peerId;
     data.roomId = this.roomId;
+    if (this.roomPassword) {
+      data.passHash = this.hashPassword(this.roomPassword);
+    }
     if (!data.userName) data.userName = this.userName;
     this.sendRaw(data);
   }
@@ -267,7 +295,7 @@ class UniversalSignalingClient {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     try {
       if (this.isMqtt) {
-        const topic = `nps-party-v1/${this.roomId}`;
+        const topic = this.getRoomTopic();
         const jsonStr = JSON.stringify(data);
         const pkt = this.buildMqttPublish(topic, jsonStr);
         this.ws.send(pkt);

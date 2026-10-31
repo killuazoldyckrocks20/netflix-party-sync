@@ -44,6 +44,7 @@
   let dataChannel = null;
 
   let roomId = 'PARTY77';
+  let roomPassword = '';
   let peerId = 'peer-' + Math.random().toString(36).substring(2, 9);
   let userName = 'You';
   let serverWsUrl = 'cloud'; // Default: Serverless Cloud Mode (0 local servers needed)
@@ -178,7 +179,7 @@
           <span class="nps-timecode" id="nps-timecode-label">00:00:00</span>
           <div style="display: flex; gap: 6px;">
             <button class="nps-sync-btn" id="nps-playpause-btn" title="Toggle Play / Pause (Spacebar)">⏯️ Play/Pause</button>
-            <button class="nps-sync-btn nps-catchup-btn" id="nps-catchup-btn" title="Catch-Up Sync: If behind, plays until aligned while keeping ahead party paused">🎯 Catch Up</button>
+            <button class="nps-sync-btn nps-catchup-btn" id="nps-catchup-btn" title="Catch-Up Sync: Plays until aligned with friend (Shortcut: Alt+S or Option+S)">🎯 Catch Up (Alt+S)</button>
           </div>
         </div>
 
@@ -268,9 +269,10 @@
 
     // Copy Invite Link
     copyBtn.addEventListener('click', () => {
-      const inviteUrl = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
+      const passParam = roomPassword ? `&pass=${encodeURIComponent(roomPassword)}` : '';
+      const inviteUrl = `https://killuazoldyckrocks20.github.io/netflix-party-sync/?room=${encodeURIComponent(roomId)}${passParam}`;
       navigator.clipboard.writeText(inviteUrl).then(() => {
-        showSyncAlert('🔗 Link Copied to Clipboard!');
+        showSyncAlert('🔗 Invite Link & Password Copied!');
       });
     });
 
@@ -847,6 +849,7 @@
 
     sigClient = new UniversalSignalingClient({
       roomId: roomId,
+      roomPassword: roomPassword,
       peerId: peerId,
       userName: userName,
       serverUrl: serverWsUrl,
@@ -857,7 +860,10 @@
       },
       onMessage: async (msg) => {
         try {
-          if (msg.type === 'joined') {
+          if (msg.type === 'auth-error') {
+            showSyncAlert('🔒 ' + (msg.error || 'Incorrect room password'), '❌');
+            return;
+          } else if (msg.type === 'joined') {
             console.log('[Signaling] Joined room', msg.roomId, 'Existing peers:', msg.peers);
             if (msg.peers && msg.peers.length > 0) {
               const peer = msg.peers[0];
@@ -1340,10 +1346,37 @@
     }
   });
 
+  // Global Keyboard Shortcut: Alt+S (Option+S) or Alt+R to Resync Playback
+  window.addEventListener('keydown', (e) => {
+    const isAltS = (e.altKey && (e.code === 'KeyS' || e.key.toLowerCase() === 's'));
+    const isAltR = (e.altKey && (e.code === 'KeyR' || e.key.toLowerCase() === 'r'));
+    const isCtrlShiftS = (e.ctrlKey && e.shiftKey && (e.code === 'KeyS' || e.key.toLowerCase() === 's'));
+
+    if (isAltS || isAltR || isCtrlShiftS) {
+      const tag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+      if (tag === 'input' || tag === 'textarea') return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const video = getMediaVideo();
+      const localTime = video ? video.currentTime : lastKnownPlayerTime;
+
+      if (typeof currentRemoteTime === 'number' && currentRemoteTime > 0) {
+        showSyncAlert(`🎯 [Alt+S] Resyncing to Friend (${formatTime(currentRemoteTime)})...`, '⚡');
+        runCatchUpTo(currentRemoteTime, isPlayerPaused ? 'pause' : 'play', 'Friend');
+      } else {
+        showSyncAlert('🎯 [Alt+S] Requested Instant Resync from Friend', '📡');
+        broadcastSyncState('request_catch_up', localTime);
+      }
+    }
+  }, true);
+
   // Storage / Settings initialization
   function loadConfigAndStart() {
     function onConfigLoaded(config) {
       if (config.roomId) roomId = config.roomId;
+      if (config.roomPassword) roomPassword = config.roomPassword;
       if (config.serverUrl) serverWsUrl = config.serverUrl;
       if (config.userName) userName = config.userName;
       if (typeof config.audioEnabled === 'boolean') isAudioEnabled = config.audioEnabled;
@@ -1355,10 +1388,13 @@
         serverWsUrl = `${proto}//${window.location.host}/ws`;
       }
 
-      // Check URL query parameters for ?room=XYZ
+      // Check URL query parameters for ?room=XYZ&pass=XYZ
       const urlParams = new URLSearchParams(window.location.search);
       if (urlParams.get('room')) {
         roomId = urlParams.get('room').toUpperCase();
+      }
+      if (urlParams.get('pass')) {
+        roomPassword = urlParams.get('pass');
       }
 
       buildOverlayDOM();
@@ -1368,7 +1404,7 @@
     }
 
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-      chrome.storage.local.get(['roomId', 'serverUrl', 'userName', 'audioEnabled', 'videoEnabled'], (res) => {
+      chrome.storage.local.get(['roomId', 'roomPassword', 'serverUrl', 'userName', 'audioEnabled', 'videoEnabled'], (res) => {
         onConfigLoaded(res || {});
       });
     } else {

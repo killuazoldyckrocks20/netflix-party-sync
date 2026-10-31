@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#121212">
   <title>Netflix Party Sync & Video Call</title>
-  <link rel="stylesheet" href="style.css?v=3.2">
+  <link rel="stylesheet" href="style.css?v=3.3">
 </head>
 <body>
   <div class="app-container">
@@ -34,6 +34,11 @@
       <div class="form-field">
         <label for="input-room">Room Code</label>
         <input type="text" id="input-room" placeholder="PARTY77" uppercase>
+      </div>
+
+      <div class="form-field">
+        <label for="input-pass">Room Password (Secret)</label>
+        <input type="password" id="input-pass" placeholder="•••••••• (optional or private)">
       </div>
 
       <div class="form-field">
@@ -105,9 +110,9 @@
           <span id="playpause-label">Tap to Play Sync</span>
         </button>
 
-        <!-- Catch-Up Sync Button -->
-        <button class="tool-btn" id="btn-mobile-catchup" style="width: 100%; height: 38px; margin-top: 8px; font-size: 13px; font-weight: 700; background: rgba(229, 9, 20, 0.2); border: 1px solid #E50914; color: #fff;" title="Catch-Up Sync: Plays behind party until aligned, keeping ahead party paused">
-          🎯 Catch-Up Sync
+        <!-- Catch-Up Sync Button & Keyboard Shortcut Hint -->
+        <button class="tool-btn" id="btn-mobile-catchup" style="width: 100%; height: 38px; margin-top: 8px; font-size: 13px; font-weight: 700; background: rgba(229, 9, 20, 0.2); border: 1px solid #E50914; color: #fff;" title="Catch-Up Sync: Plays behind party until aligned (Keyboard Shortcut: Alt+S or Option+S)">
+          🎯 Catch-Up Sync (Alt+S)
         </button>
 
         <!-- Show Title / Episode Badge -->
@@ -178,7 +183,7 @@
     </main>
   </div>
 
-  <script src="signaling.js?v=3.2"></script>
-  <script src="app.js?v=3.2"></script>
+  <script src="signaling.js?v=3.3"></script>
+  <script src="app.js?v=3.3"></script>
 </body>
 </html>
