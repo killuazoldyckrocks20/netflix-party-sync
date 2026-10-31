@@ -153,6 +153,9 @@
     roomCodeDisplay.textContent = roomId;
 
     updatePlayPauseUI();
+    if (syncMediaPlayer) {
+      try { syncMediaPlayer.load(); } catch (e) {}
+    }
     await initMedia();
     initWebSocket();
   });
