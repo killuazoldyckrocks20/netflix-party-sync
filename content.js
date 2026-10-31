@@ -397,11 +397,11 @@
     if (playPauseBtn) {
       playPauseBtn.addEventListener('click', () => {
         const nextAction = isPlayerPaused ? 'play' : 'pause';
-        const video = document.querySelector('video');
+        const video = getMediaVideo();
         const now = video ? video.currentTime : lastKnownPlayerTime;
         ignoreLocalEventsUntil = Date.now() + 1500;
         simulateMediaControl(nextAction, now);
-        broadcastSyncState(nextAction, now);
+        broadcastSyncState(nextAction, now, { isPaused: nextAction === 'pause' });
         showSyncAlert(`You ${nextAction}ed playback`, nextAction === 'play' ? '▶️' : '⏸️');
       });
     }
@@ -409,7 +409,7 @@
     // Catch-Up Sync Button
     if (catchUpBtn) {
       catchUpBtn.addEventListener('click', () => {
-        const video = document.querySelector('video');
+        const video = getMediaVideo();
         const now = video ? video.currentTime : lastKnownPlayerTime;
         if (typeof currentRemoteTime === 'number' && currentRemoteTime > 0) {
           runCatchUpTo(currentRemoteTime, isPlayerPaused ? 'pause' : 'play', 'Friend');
@@ -824,9 +824,9 @@
   function setupDataChannel(dc) {
     dc.onopen = () => {
       console.log('[DataChannel] Peer Data Channel OPEN');
-      const video = document.querySelector('video');
+      const video = getMediaVideo();
       const now = video ? video.currentTime : lastKnownPlayerTime;
-      broadcastSyncState(isPlayerPaused ? 'pause' : 'play', now, { initialSync: true });
+      broadcastSyncState(isPlayerPaused ? 'pause' : 'play', now, { initialSync: true, isPaused: isPlayerPaused });
     };
     dc.onmessage = (event) => {
       try {
@@ -871,9 +871,9 @@
             showSyncAlert(`${msg.userName} joined!`, '👋');
             await createPeerConnection(false, msg.peerId);
             setTimeout(() => {
-              const video = document.querySelector('video');
+              const video = getMediaVideo();
               const now = video ? video.currentTime : lastKnownPlayerTime;
-              broadcastSyncState(isPlayerPaused ? 'pause' : 'play', now, { initialSync: true });
+              broadcastSyncState(isPlayerPaused ? 'pause' : 'play', now, { initialSync: true, isPaused: isPlayerPaused });
             }, 500);
           } else if (msg.type === 'signal') {
             handleSignalingData(msg.signal, msg.senderId);
@@ -941,9 +941,23 @@
     }
   }
 
+  // Helper: Retrieve active movie/show video element while ignoring WebRTC call and extension overlay videos
+  function getMediaVideo() {
+    const all = Array.from(document.querySelectorAll('video')).filter(v => {
+      if (v.id === 'nps-remote-video' || v.id === 'nps-local-video') return false;
+      if (v.id === 'remote-video' || v.id === 'local-video') return false;
+      if (v.classList.contains('nps-remote-video') || v.classList.contains('nps-local-video')) return false;
+      if (v.classList.contains('remote-stream') || v.classList.contains('self-video')) return false;
+      return true;
+    });
+    if (all.length === 0) return null;
+    const netflixVid = all.find(v => v.closest('.watch-video--player-view, .nf-player-container'));
+    return netflixVid || all[0];
+  }
+
   // Multi-tier Media Control & Key Emulation
   function simulateMediaControl(action, time) {
-    const video = document.querySelector('video');
+    const video = getMediaVideo();
     const isPaused = video ? video.paused : isPlayerPaused;
 
     // Time seeking if difference is significant (> 1.2s)
@@ -1031,7 +1045,7 @@
   function runCatchUpTo(targetTime, desiredAction = 'pause', sender = 'Friend') {
     stopCatchUp();
 
-    const video = document.querySelector('video');
+    const video = getMediaVideo();
     const localTime = video ? video.currentTime : lastKnownPlayerTime;
     const diff = targetTime - localTime;
 
@@ -1086,7 +1100,7 @@
       checkShowSync();
     }
 
-    const video = document.querySelector('video');
+    const video = getMediaVideo();
     const localTime = video ? video.currentTime : lastKnownPlayerTime;
 
     if (action === 'pause') {
@@ -1121,14 +1135,14 @@
       stopCatchUp();
       ignoreLocalEventsUntil = Date.now() + 1500;
       window.postMessage({ source: 'NETFLIX_PARTY_CONTENT', action: 'jump_forward' }, '*');
-      const video = document.querySelector('video');
+      const video = getMediaVideo();
       if (video) video.currentTime += 10;
       showSyncAlert(`${sender} skipped +10s`, '⏩');
     } else if (action === 'jump_back') {
       stopCatchUp();
       ignoreLocalEventsUntil = Date.now() + 1500;
       window.postMessage({ source: 'NETFLIX_PARTY_CONTENT', action: 'jump_back' }, '*');
-      const video = document.querySelector('video');
+      const video = getMediaVideo();
       if (video) video.currentTime = Math.max(0, video.currentTime - 10);
       showSyncAlert(`${sender} jumped -10s`, '⏪');
     } else if (action === 'skip_intro') {
@@ -1140,12 +1154,12 @@
       window.postMessage({ source: 'NETFLIX_PARTY_CONTENT', action: 'next_episode' }, '*');
       showSyncAlert(`${sender} switched to next episode`, '⏭️');
     } else if (action === 'request_state') {
-      const video = document.querySelector('video');
+      const video = getMediaVideo();
       const now = video ? video.currentTime : lastKnownPlayerTime;
-      broadcastSyncState(isPlayerPaused ? 'pause' : 'play', now);
+      broadcastSyncState(isPlayerPaused ? 'pause' : 'play', now, { isPaused: isPlayerPaused });
     } else if (action === 'time_heartbeat') {
       currentRemoteTime = time;
-      const video = document.querySelector('video');
+      const video = getMediaVideo();
       if (!video) {
         lastKnownPlayerTime = time;
         updateTimecodeUI(time, 0);
@@ -1221,7 +1235,7 @@
 
   // Direct DOM Video Hook (Works 100% on Netflix, YouTube, HTML5 simulator without relying on bridge)
   function hookDOMVideo() {
-    const video = document.querySelector('video');
+    const video = getMediaVideo();
     if (!video) return;
 
     // Keep state current
@@ -1243,7 +1257,7 @@
       isPlayerPaused = false;
       updateTimecodeUI(video.currentTime, video.duration);
       if (Date.now() >= ignoreLocalEventsUntil) {
-        broadcastSyncState('play', video.currentTime);
+        broadcastSyncState('play', video.currentTime, { isPaused: false });
         showSyncAlert('You played', '▶️');
       }
     });
@@ -1253,7 +1267,7 @@
       isPlayerPaused = true;
       updateTimecodeUI(video.currentTime, video.duration);
       if (Date.now() >= ignoreLocalEventsUntil) {
-        broadcastSyncState('pause', video.currentTime);
+        broadcastSyncState('pause', video.currentTime, { isPaused: true });
         showSyncAlert('You paused', '⏸️');
       }
     });
@@ -1262,7 +1276,7 @@
       lastKnownPlayerTime = video.currentTime;
       updateTimecodeUI(video.currentTime, video.duration);
       if (Date.now() >= ignoreLocalEventsUntil) {
-        broadcastSyncState('seek', video.currentTime);
+        broadcastSyncState('seek', video.currentTime, { isPaused: video.paused });
         showSyncAlert('You jumped', '⏩');
       }
     });
@@ -1273,13 +1287,13 @@
 
   // Periodic heartbeat sync: broadcasts advancing video time to keep iPhone in perfect sync
   setInterval(() => {
-    const video = document.querySelector('video');
+    const video = getMediaVideo();
     const now = video ? video.currentTime : lastKnownPlayerTime;
     const paused = video ? video.paused : isPlayerPaused;
-    if (!paused && now > 0) {
-      broadcastSyncState('time_heartbeat', now);
+    if (now >= 0) {
+      broadcastSyncState('time_heartbeat', now, { isPaused: paused });
     }
-  }, 1500);
+  }, 1000);
 
   // Bridge Listener: State changes & User interactions reported by Netflix player
   window.addEventListener('message', (event) => {

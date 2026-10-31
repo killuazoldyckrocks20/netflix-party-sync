@@ -79,6 +79,42 @@
   }
   inputName.value = 'Mobile ' + Math.floor(Math.random() * 90 + 10);
 
+  // Synced Media Player Element (for in-browser synced test playback)
+  const syncMediaPlayer = document.getElementById('sync-media-player');
+  let ignoreLocalMediaEvents = 0;
+
+  if (syncMediaPlayer) {
+    syncMediaPlayer.addEventListener('play', () => {
+      if (Date.now() < ignoreLocalMediaEvents) return;
+      isPlaying = true;
+      currentTime = syncMediaPlayer.currentTime;
+      updatePlayPauseUI();
+      broadcastAction('play', currentTime);
+      showBanner('Playing synced media', '▶️');
+    });
+
+    syncMediaPlayer.addEventListener('pause', () => {
+      if (Date.now() < ignoreLocalMediaEvents) return;
+      isPlaying = false;
+      currentTime = syncMediaPlayer.currentTime;
+      updatePlayPauseUI();
+      broadcastAction('pause', currentTime);
+      showBanner('Paused synced media', '⏸️');
+    });
+
+    syncMediaPlayer.addEventListener('timeupdate', () => {
+      currentTime = syncMediaPlayer.currentTime;
+      timecodeDisplay.textContent = formatTime(currentTime);
+    });
+
+    syncMediaPlayer.addEventListener('seeked', () => {
+      if (Date.now() < ignoreLocalMediaEvents) return;
+      currentTime = syncMediaPlayer.currentTime;
+      broadcastAction('seek', currentTime);
+      showBanner(`Jumped to ${formatTime(currentTime)}`, '⏩');
+    });
+  }
+
   // Time Formatter
   function formatTime(seconds) {
     const sec = Math.floor(seconds || 0);
@@ -116,6 +152,7 @@
     partyView.classList.remove('hidden');
     roomCodeDisplay.textContent = roomId;
 
+    updatePlayPauseUI();
     await initMedia();
     initWebSocket();
   });
@@ -479,11 +516,15 @@
               const peer = msg.peers[0];
               updateFriendInfo(peer.userName);
               await createPeerConnection(true, peer.peerId);
+              broadcastAction('request_state', currentTime);
             }
           } else if (msg.type === 'peer-joined') {
             updateFriendInfo(msg.userName);
             showBanner(`${msg.userName} joined!`, '👋');
             await createPeerConnection(false, msg.peerId);
+            setTimeout(() => {
+              broadcastAction(isPlaying ? 'play' : 'pause', currentTime);
+            }, 600);
           } else if (msg.type === 'signal') {
             handleSignaling(msg.signal, msg.senderId);
           } else if (msg.type === 'sync') {
@@ -628,10 +669,19 @@
         if (Math.abs(currentTime - time) > 1.2 || !isPlaying) {
           currentTime = time;
           timecodeDisplay.textContent = formatTime(currentTime);
+          if (syncMediaPlayer && Math.abs(syncMediaPlayer.currentTime - time) > 1.5) {
+            ignoreLocalMediaEvents = Date.now() + 1000;
+            syncMediaPlayer.currentTime = time;
+          }
         }
         if (msg.isPaused !== undefined && msg.isPaused !== !isPlaying) {
           isPlaying = !msg.isPaused;
           updatePlayPauseUI();
+          if (syncMediaPlayer) {
+            ignoreLocalMediaEvents = Date.now() + 1000;
+            if (isPlaying && syncMediaPlayer.paused) syncMediaPlayer.play().catch(() => {});
+            if (!isPlaying && !syncMediaPlayer.paused) syncMediaPlayer.pause();
+          }
         }
       }
       return;
@@ -646,6 +696,11 @@
         timecodeDisplay.textContent = formatTime(currentTime);
         isPlaying = false;
         updatePlayPauseUI();
+        if (syncMediaPlayer && !syncMediaPlayer.paused) {
+          ignoreLocalMediaEvents = Date.now() + 1500;
+          if (typeof time === 'number') syncMediaPlayer.currentTime = time;
+          syncMediaPlayer.pause();
+        }
         showBanner(`${sender} paused at ${formatTime(time)}`, '⏸️');
       }
     } else if (action === 'play') {
@@ -657,25 +712,44 @@
         timecodeDisplay.textContent = formatTime(currentTime);
         isPlaying = true;
         updatePlayPauseUI();
+        if (syncMediaPlayer && syncMediaPlayer.paused) {
+          ignoreLocalMediaEvents = Date.now() + 1500;
+          if (typeof time === 'number') syncMediaPlayer.currentTime = time;
+          syncMediaPlayer.play().catch(() => {});
+        }
         showBanner(`${sender} played at ${formatTime(time)}`, '▶️');
       }
     } else if (action === 'seek') {
       stopCatchUp();
       if (typeof time === 'number') currentTime = time;
       timecodeDisplay.textContent = formatTime(currentTime);
+      if (syncMediaPlayer && typeof time === 'number') {
+        ignoreLocalMediaEvents = Date.now() + 1500;
+        syncMediaPlayer.currentTime = time;
+      }
       showBanner(`${sender} jumped to ${formatTime(time)}`, '⏩');
     } else if (action === 'jump_forward') {
       currentTime += 10;
       timecodeDisplay.textContent = formatTime(currentTime);
+      if (syncMediaPlayer) {
+        ignoreLocalMediaEvents = Date.now() + 1500;
+        syncMediaPlayer.currentTime = currentTime;
+      }
       showBanner(`${sender} skipped +10s`, '⏩');
     } else if (action === 'jump_back') {
       currentTime = Math.max(0, currentTime - 10);
       timecodeDisplay.textContent = formatTime(currentTime);
+      if (syncMediaPlayer) {
+        ignoreLocalMediaEvents = Date.now() + 1500;
+        syncMediaPlayer.currentTime = currentTime;
+      }
       showBanner(`${sender} rewound -10s`, '⏪');
     } else if (action === 'skip_intro') {
       showBanner(`${sender} skipped intro`, '⏭️');
     } else if (action === 'next_episode') {
       showBanner(`${sender} next episode`, '⏭️');
+    } else if (action === 'request_state') {
+      broadcastAction(isPlaying ? 'play' : 'pause', currentTime);
     } else if (action === 'request_catch_up') {
       if (typeof time === 'number') {
         runCatchUpTo(time, isPlaying ? 'play' : 'pause', sender);
@@ -726,6 +800,17 @@
     isPlaying = !isPlaying;
     updatePlayPauseUI();
     const action = isPlaying ? 'play' : 'pause';
+
+    if (syncMediaPlayer) {
+      ignoreLocalMediaEvents = Date.now() + 1500;
+      if (isPlaying) {
+        syncMediaPlayer.play().catch(() => {});
+      } else {
+        syncMediaPlayer.pause();
+      }
+      currentTime = syncMediaPlayer.currentTime;
+    }
+
     broadcastAction(action, currentTime);
     showBanner(`You ${action}ed playback`, isPlaying ? '▶️' : '⏸️');
   });
@@ -742,6 +827,10 @@
   btnSeekBack.addEventListener('click', () => {
     currentTime = Math.max(0, currentTime - 10);
     timecodeDisplay.textContent = formatTime(currentTime);
+    if (syncMediaPlayer) {
+      ignoreLocalMediaEvents = Date.now() + 1500;
+      syncMediaPlayer.currentTime = currentTime;
+    }
     broadcastAction('jump_back', currentTime);
     showBanner('Rewound 10s', '⏪');
   });
@@ -749,6 +838,10 @@
   btnSeekFwd.addEventListener('click', () => {
     currentTime += 10;
     timecodeDisplay.textContent = formatTime(currentTime);
+    if (syncMediaPlayer) {
+      ignoreLocalMediaEvents = Date.now() + 1500;
+      syncMediaPlayer.currentTime = currentTime;
+    }
     broadcastAction('jump_forward', currentTime);
     showBanner('Forward 10s', '⏩');
   });

@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#121212">
   <title>Netflix Party Sync & Video Call</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=3.2">
 </head>
 <body>
   <div class="app-container">
@@ -79,7 +79,7 @@
       <section class="controller-card">
         <div class="controller-header">
           <span class="controller-title">Synced Playback</span>
-          <span class="sync-state-pill" id="sync-state-pill">STANDBY</span>
+          <span class="sync-state-pill paused" id="sync-state-pill">PAUSED</span>
         </div>
 
         <div style="display: flex; align-items: baseline; justify-content: space-between;">
@@ -98,8 +98,8 @@
 
         <!-- Giant Tactile Play / Pause Sync Button -->
         <button class="big-sync-btn" id="btn-master-playpause">
-          <span id="playpause-icon">⏸️</span>
-          <span id="playpause-label">Pause Playback</span>
+          <span id="playpause-icon">▶️</span>
+          <span id="playpause-label">Tap to Play Sync</span>
         </button>
 
         <!-- Catch-Up Sync Button -->
@@ -112,8 +112,19 @@
           <span id="mobile-show-title">🎬 Netflix Show</span>
         </div>
 
+        <!-- Direct Synced Video Player (Blender Foundation / Open Media test movie) -->
+        <div class="player-card" id="player-card" style="margin-top: 10px; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; overflow: hidden;">
+          <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: rgba(255,255,255,0.06); font-size: 11px; font-weight: 600;">
+            <span>🎬 Tears of Steel (Synced Media)</span>
+            <span style="font-size: 10px; color: #46D369;">● SYNCED</span>
+          </div>
+          <video id="sync-media-player" playsinline controls style="width: 100%; max-height: 180px; background: #000; display: block;" preload="metadata" src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4">
+            <source src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4" type="video/mp4">
+          </video>
+        </div>
+
         <!-- Open Netflix App Deep Link -->
-        <a href="https://www.netflix.com" target="_blank" class="netflix-app-btn" id="btn-open-netflix">
+        <a href="https://www.netflix.com" target="_blank" class="netflix-app-btn" id="btn-open-netflix" style="margin-top: 8px;">
           🍿 Open in Netflix App
         </a>
       </section>
@@ -164,7 +175,7 @@
     </main>
   </div>
 
-  <script src="signaling.js"></script>
-  <script src="app.js"></script>
+  <script src="signaling.js?v=3.2"></script>
+  <script src="app.js?v=3.2"></script>
 </body>
 </html>

@@ -27,6 +27,7 @@ class UniversalSignalingClient {
 
     // Public 24/7 free brokers (zero server required)
     this.cloudBrokers = [
+      'wss://broker.hivemq.com:8884/mqtt',
       'wss://broker.emqx.io:8084/mqtt',
       'wss://test.mosquitto.org:8081'
     ];
@@ -37,12 +38,12 @@ class UniversalSignalingClient {
     if (!this.serverUrl || this.serverUrl === 'cloud' || this.serverUrl === 'default') {
       return true;
     }
-    if (this.serverUrl.includes('emqx') || this.serverUrl.includes('mosquitto')) {
+    if (this.serverUrl.includes('emqx') || this.serverUrl.includes('mosquitto') || this.serverUrl.includes('hivemq')) {
       return true;
     }
     // If loaded on GitHub Pages or any https domain without explicit ws:// URL
     if (typeof window !== 'undefined' && window.location) {
-      if (window.location.hostname.includes('github.io') && this.serverUrl.includes('localhost')) {
+      if (window.location.hostname.includes('github.io')) {
         return true;
       }
     }
@@ -83,9 +84,24 @@ class UniversalSignalingClient {
       this.ws.send(connectPkt);
     };
 
-    this.ws.onmessage = (event) => {
+    this.ws.onmessage = async (event) => {
       try {
-        const buf = new Uint8Array(event.data);
+        let arrayBuf;
+        if (event.data instanceof ArrayBuffer) {
+          arrayBuf = event.data;
+        } else if (event.data instanceof Blob) {
+          arrayBuf = await event.data.arrayBuffer();
+        } else if (typeof event.data === 'string') {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.senderId && msg.senderId === this.peerId) return;
+            this.handleIncomingMessage(msg);
+          } catch (e) {}
+          return;
+        } else {
+          return;
+        }
+        const buf = new Uint8Array(arrayBuf);
         if (buf.length < 2) return;
         const ptype = buf[0] & 0xF0;
 
@@ -97,6 +113,7 @@ class UniversalSignalingClient {
           this.ws.send(this.buildMqttSubscribe(topic, 1));
 
           // Start heartbeat ping every 25 seconds
+          if (this.pingTimer) clearInterval(this.pingTimer);
           this.pingTimer = setInterval(() => {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
               this.ws.send(new Uint8Array([0xC0, 0x00])); // PINGREQ
@@ -118,7 +135,7 @@ class UniversalSignalingClient {
           const parsed = this.parseMqttPublish(buf);
           if (parsed && parsed.payload) {
             try {
-              const msg = JSON.parse(parsed.payload);
+              const msg = JSON.parse(parsed.payload.trim());
               // Ignore messages echoed back from self
               if (msg.senderId && msg.senderId === this.peerId) {
                 return;
@@ -380,6 +397,11 @@ class UniversalSignalingClient {
     const topicBytes = buf.subarray(idx, idx + topicLen);
     const topic = new TextDecoder().decode(topicBytes);
     idx += topicLen;
+
+    const qos = (buf[0] & 0x06) >> 1;
+    if (qos > 0 && idx + 2 <= buf.length) {
+      idx += 2; // Skip 2-byte Packet Identifier for QoS 1 & 2
+    }
 
     const payloadBytes = buf.subarray(idx);
     const payload = new TextDecoder().decode(payloadBytes);

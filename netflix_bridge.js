@@ -31,7 +31,16 @@
   }
 
   function getVideoElement() {
-    return document.querySelector('video');
+    const all = Array.from(document.querySelectorAll('video')).filter(v => {
+      if (v.id === 'nps-remote-video' || v.id === 'nps-local-video') return false;
+      if (v.id === 'remote-video' || v.id === 'local-video') return false;
+      if (v.classList.contains('nps-remote-video') || v.classList.contains('nps-local-video')) return false;
+      if (v.classList.contains('remote-stream') || v.classList.contains('self-video')) return false;
+      return true;
+    });
+    if (all.length === 0) return null;
+    const netflixVid = all.find(v => v.closest('.watch-video--player-view, .nf-player-container'));
+    return netflixVid || all[0];
   }
 
   function simulateKey(key, code, keyCode) {
